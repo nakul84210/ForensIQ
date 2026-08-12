@@ -1,0 +1,9 @@
+<component name="libraryTable">
+  <library name="cresci-2017">
+    <CLASSES>
+      <root url="jar://$PROJECT_DIR$/forensiq-backend/app/ml/data/cresci-2017.zip!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>

@@ -1,0 +1,6 @@
+
+# Large dataset files
+*.zip
+
+# macOS files
+.DS_Store

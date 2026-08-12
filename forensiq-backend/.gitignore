@@ -1,0 +1,32 @@
+# forensiq-backend/.gitignore
+
+# Environment variables — never commit API keys
+.env
+.env.*
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Virtual environment
+venv/
+env/
+.venv/
+
+# Trained ML model artifacts — large binary files, regenerate with train_model.py
+app/ml/*.pkl
+
+# Training data and cache — contains API responses with real profile data
+app/ml/raw_profile_cache.json
+app/ml/labeled_profiles.csv
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# macOS
+.DS_Store
