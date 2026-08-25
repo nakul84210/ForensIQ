@@ -27,7 +27,6 @@ const navGroups = [
     title: 'Intelligence & Network',
     items: [
       { path: '/network', label: 'Network Graph',    icon: Share2,   badge: null },
-      { path: '/heatmap', label: 'Misinfo Heatmap',  icon: MapPin,   badge: 'Global' },
       { path: '/reports', label: 'Evidence Reports', icon: FileText, badge: null },
     ],
   },

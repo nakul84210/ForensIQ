@@ -12,7 +12,6 @@ import ThreatFeed from './pages/ThreatFeed'
 import DeepfakeDetector from './pages/DeepfakeDetector'
 import SimilarityScanner from './pages/SimilarityScanner'
 import CredibilityScorer from './pages/CredibilityScorer'
-import MisinfoHeatmap from './pages/MisinfoHeatmap'
 
 function App() {
   return (
@@ -80,14 +79,7 @@ function App() {
               </Layout>
             }
           />
-          <Route
-            path="/heatmap"
-            element={
-              <Layout>
-                <MisinfoHeatmap />
-              </Layout>
-            }
-          />
+
           <Route
             path="/threats"
             element={

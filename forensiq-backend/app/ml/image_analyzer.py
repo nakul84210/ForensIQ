@@ -42,7 +42,11 @@ def get_image_features(image_bytes: bytes) -> dict:
             patches.append(float(np.var(patch)))
     patch_var_std = float(np.std(patches)) if patches else 0
 
-    # Feature 6 — EXIF
+    # Feature 6 — EXIF (informational only — NOT used for scoring)
+    # NOTE: Social media platforms (Twitter, Instagram, Facebook, etc.) universally
+    # strip EXIF metadata on upload for ALL images, real or AI-generated. Therefore,
+    # EXIF absence is NOT informative for deepfake detection in this use case.
+    # EXIF data is extracted purely for display in the analysis report.
     has_exif = False
     camera = ""
     try:
@@ -74,6 +78,18 @@ def get_image_features(image_bytes: bytes) -> dict:
     }
 
 def score_features(f: dict, filename: str = "") -> tuple:
+    """
+    Score image features for deepfake/AI-generation likelihood.
+
+    Scoring signals (EXIF is NOT scored — see note in get_image_features):
+      - ELA uniformity: high weight (AI images have very uniform compression)
+      - Noise variance: medium-high weight (synthetic images lack sensor noise)
+      - High-frequency content: medium-high weight (AI images often lack fine detail)
+      - Color distribution: low-medium weight (supplementary signal)
+      - Texture variance: low-medium weight (supplementary signal)
+      - AI dimensions: medium weight (common AI canvas sizes)
+      - Filename keywords: high weight (explicit generator tool names)
+    """
     score = 0
     reasons = []
 
@@ -83,39 +99,47 @@ def score_features(f: dict, filename: str = "") -> tuple:
         score += 65
         reasons.append("Filename metadata matches AI generator tool pattern (" + filename + ")")
 
-    # 1. ELA range check — only penalize if EXIF is missing AND ELA is very uniform
+    # 1. ELA range check — uniform ELA is suspicious regardless of EXIF
+    # (EXIF is not considered because social media strips it universally)
     ela_range = f["ela_range"]
     if ela_range < 1.2:
-        if not f["has_exif"] or is_explicit_ai_filename:
-            score += 25
-            reasons.append("Uniform ELA compression profile without camera metadata")
-        else:
-            score += 5
+        score += 25
+        reasons.append("Uniform ELA compression profile (consistent with AI generation)")
     elif ela_range < 2.5:
-        score += 5
+        score += 8
+        reasons.append("Moderately uniform ELA compression")
 
-    # 2. Noise std check — real camera portraits often have smooth lighting/filtering
+    # 2. Noise std check — synthetic images typically have very low noise variance
     ns = f["noise_std"]
     if ns < 20:
-        score += 15
-        reasons.append("Low sensor noise variance")
+        score += 20
+        reasons.append("Low sensor noise variance (consistent with synthetic generation)")
 
     # 3. High frequency content check
     if f["hf_ratio"] < 0.03:
-        score += 15
+        score += 18
         reasons.append("Low high-frequency detail density")
 
-    # 4. EXIF bonus & penalty balance
-    if f["has_exif"]:
-        score = max(0, score - 25)
-    else:
+    # 4. Color distribution — supplementary signal
+    avg_channel_std = (f["r_std"] + f["g_std"] + f["b_std"]) / 3
+    if avg_channel_std < 20:
         score += 10
-        reasons.append("No EXIF camera metadata found")
+        reasons.append("Low color channel variance (overly uniform color distribution)")
 
-    # 5. AI dimensions check
+    # 5. Local texture variance — supplementary signal
+    if f["patch_var_std"] < 30:
+        score += 8
+        reasons.append("Uniform local texture (lacks natural texture variation)")
+
+    # 6. AI dimensions check
     if f["is_ai_size"]:
         score += 15
         reasons.append("Image dimensions match standard AI generation canvas sizes")
+
+    # NOTE: EXIF metadata is NOT scored. Social media platforms (Twitter, Instagram,
+    # Facebook, etc.) strip EXIF on upload for ALL images — real and AI-generated alike.
+    # Its absence is therefore not informative for this use case and would cause
+    # false positives on virtually every social media image.
 
     # Final score calibration
     final_score = min(max(score, 0), 99)
@@ -126,16 +150,13 @@ def detect_deepfake(image_bytes: bytes, filename: str = "") -> dict:
     f = get_image_features(image_bytes)
     score, reasons = score_features(f, filename=filename)
 
-    fn_lower = filename.lower()
-    is_explicit_ai = any(kw in fn_lower for kw in ["chatgpt", "dall", "dalle", "midjourney", "stablediffusion", "sdxl", "flux", "bing", "ai_generated", "generated"])
-
     verdict = "AI Generated" if score >= 55 else "Likely Real"
 
     checks = [
         {
             "label": "Error Level Analysis",
-            "result": "Suspicious" if f["ela_range"] < 1.2 and not f["has_exif"] else "Normal",
-            "risk": "high" if f["ela_range"] < 1.2 and not f["has_exif"] else "low",
+            "result": "Suspicious" if f["ela_range"] < 1.2 else "Normal",
+            "risk": "high" if f["ela_range"] < 1.2 else "low",
             "detail": "ELA range across qualities: " + str(round(f["ela_range"],2)) + " (low = uniform compression)"
         },
         {
@@ -163,10 +184,12 @@ def detect_deepfake(image_bytes: bytes, filename: str = "") -> dict:
             "detail": "Patch variance std: " + str(round(f["patch_var_std"],2))
         },
         {
-            "label": "EXIF Metadata",
-            "result": "Missing" if not f["has_exif"] else "Present — " + f["camera"],
-            "risk": "medium" if not f["has_exif"] else "low",
-            "detail": "Camera: " + f["camera"] if f["has_exif"] else "No camera metadata"
+            # EXIF is informational only — explicitly labeled as such
+            "label": "EXIF Metadata (Informational)",
+            "result": "Present — " + f["camera"] if f["has_exif"] else "Not present (normal for social media images)",
+            "risk": "info",
+            "detail": ("Camera: " + f["camera"] if f["has_exif"]
+                       else "Social media platforms strip EXIF on upload — absence is not indicative of AI generation")
         },
         {
             "label": "Image Dimensions",
@@ -176,13 +199,19 @@ def detect_deepfake(image_bytes: bytes, filename: str = "") -> dict:
         },
     ]
 
-    model_detected = "DALL-E / ChatGPT" if is_explicit_ai else "StyleGAN / Midjourney" if score >= 55 else "None detected"
+    # No real model-fingerprinting is implemented. Specific generator identification
+    # (e.g. "StyleGAN" vs "Midjourney" vs "DALL-E") requires dedicated classifier
+    # models trained on generator-specific artifacts. We do not present low-confidence
+    # heuristics as if they identified a specific generator.
+    generation_style_guess = "unknown"
 
     return {
         "verdict": verdict,
         "confidence": score,
         "checks": checks,
-        "ela": "Suspicious" if f["ela_range"] < 1.2 and not f["has_exif"] else "Normal",
+        "ela": "Suspicious" if f["ela_range"] < 1.2 else "Normal",
         "metadata": f["camera"] if f["has_exif"] else "None found",
-        "model": model_detected,
+        "generation_style_guess": generation_style_guess,
+        # Keep "model" key for backward compatibility but set honestly
+        "model": generation_style_guess,
     }

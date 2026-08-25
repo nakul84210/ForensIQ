@@ -9,7 +9,7 @@ Computes 4 factor categories:
 """
 
 import re
-from app.ml.text_analyzer import analyze_profile_text
+from app.ml.text_analyzer import analyze_profile_text, analyze_bio
 
 
 def score_account_history(profile: dict) -> dict:
@@ -157,7 +157,12 @@ def score_network(profile: dict) -> dict:
     geo_val = location if geo_score == 25.0 else "Not Specified"
 
     # Spam keyword check (0-25)
-    bio_spam = profile.get("features", {}).get("bio_spam_score", 0.0)
+    # Compute real bio_spam_score from the bio text using the same logic as
+    # text_analyzer.py. Previously this read profile.get("features", {}).get("bio_spam_score", 0.0)
+    # which always returned 0.0 because ProfileRequest is a flat dict without a "features" key.
+    bio_text = profile.get("bio", "") or ""
+    bio_analysis = analyze_bio(bio_text)
+    bio_spam = bio_analysis.get("bio_spam_score", 0.0)
     spam_score = 25.0 if bio_spam == 0 else 10.0 if bio_spam < 0.3 else 0.0
 
     items = [

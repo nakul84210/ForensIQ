@@ -76,7 +76,8 @@ def _build_result(clean: str, name: str, followers: int, following: int,
                   tweet_count: int, bio: str, location: str, verified: bool,
                   profile_image: str, account_age_days: int,
                   avg_hashtags: float, likes_per_post: float,
-                  recent_posts: list) -> dict:
+                  recent_posts: list,
+                  engagement_data_available: bool = True) -> dict:
     posts_per_day = round(tweet_count / max(account_age_days, 1), 2)
     return {
         "found": True,
@@ -98,6 +99,7 @@ def _build_result(clean: str, name: str, followers: int, following: int,
         "recent_posts": recent_posts,
         "label": "unknown",
         "dataset_source": "live_twitter",
+        "engagement_data_available": engagement_data_available,
     }
 
 
@@ -391,10 +393,36 @@ PRESET_PROFILES: dict[str, dict] = {
     ),
 }
 
+def DEBUG_LOG(msg: str):
+    if os.getenv("TWITTER_DEBUG", "").lower() in ("1", "true", "yes"):
+        print(f"[DEBUG_TWITTER] {msg}")
+
+def _is_valid_profile_result(res: dict | None) -> bool:
+    """
+    Sanity-check guard: check if a fetched profile dict contains internally
+    inconsistent or implausible scraped data (e.g. 50,000+ followers with 0 posts
+    AND 0 following on a non-preset account).
+    """
+    if not res or not res.get("found"):
+        return False
+
+    followers = res.get("followers", 0)
+    following = res.get("following", 0)
+    posts = res.get("posts", 0)
+
+    # Implausible anomaly: high follower count (>= 10,000) with 0 following AND 0 posts
+    # (Real high-follower accounts almost always have posts or followings).
+    if followers >= 10_000 and following == 0 and posts == 0:
+        DEBUG_LOG(f"Sanity check FAILED for profile @{res.get('username')}: followers={followers} but following=0 and posts=0")
+        return False
+
+    return True
+
 # ---------------------------------------------------------------------------
 # Strategy 1: Twitter Syndication NEXT_DATA JSON
 # ---------------------------------------------------------------------------
 def _strategy_syndication(clean: str) -> dict | None:
+    DEBUG_LOG(f"Attempting Strategy: Syndication for '@{clean}'...")
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -405,21 +433,26 @@ def _strategy_syndication(clean: str) -> dict | None:
     try:
         url = f"https://syndication.twitter.com/srv/timeline-profile/screen-name/{clean}"
         res = requests.get(url, headers=headers, timeout=8)
+        DEBUG_LOG(f"Syndication HTTP status: {res.status_code}")
         if res.status_code != 200:
+            DEBUG_LOG("Syndication failed: HTTP status != 200")
             return None
 
         soup = BeautifulSoup(res.text, "html.parser")
         script = soup.find("script", id="__NEXT_DATA__")
         if not script or not script.string:
+            DEBUG_LOG("Syndication failed: __NEXT_DATA__ script tag not found")
             return None
 
         data = json.loads(script.string)
         entries = data.get("props", {}).get("pageProps", {}).get("timeline", {}).get("entries", [])
         if not entries:
+            DEBUG_LOG("Syndication failed: no timeline entries in __NEXT_DATA__")
             return None
 
         user = entries[0].get("content", {}).get("tweet", {}).get("user", {})
         if not user:
+            DEBUG_LOG("Syndication failed: no user object in first timeline entry")
             return None
 
         recent_posts = []
@@ -434,7 +467,7 @@ def _strategy_syndication(clean: str) -> dict | None:
                 total_hashtags += text.count("#")
 
         count = max(len(recent_posts), 1)
-        return _build_result(
+        res_dict = _build_result(
             clean=clean,
             name=user.get("name", clean),
             followers=user.get("followers_count", 0),
@@ -449,8 +482,10 @@ def _strategy_syndication(clean: str) -> dict | None:
             likes_per_post=round(total_likes / count, 2),
             recent_posts=recent_posts,
         )
+        DEBUG_LOG(f"Syndication SUCCESS: result={res_dict}")
+        return res_dict
     except Exception as e:
-        print(f"[twitter_service] syndication strategy failed for @{clean}: {e}")
+        DEBUG_LOG(f"Syndication strategy EXCEPTION for @{clean}: {e}")
         return None
 
 
@@ -458,6 +493,7 @@ def _strategy_syndication(clean: str) -> dict | None:
 # Strategy 2: x.com OpenGraph meta-tag scrape
 # ---------------------------------------------------------------------------
 def _strategy_og_meta(clean: str) -> dict | None:
+    DEBUG_LOG(f"Attempting Strategy: OG-Meta for '@{clean}'...")
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -466,8 +502,11 @@ def _strategy_og_meta(clean: str) -> dict | None:
         "Accept-Language": "en-US,en;q=0.9",
     }
     try:
-        res = requests.get(f"https://x.com/{clean}", headers=headers, timeout=8)
+        url = f"https://x.com/{clean}"
+        res = requests.get(url, headers=headers, timeout=8)
+        DEBUG_LOG(f"OG-Meta HTTP status: {res.status_code} for URL: {res.url}")
         if res.status_code != 200:
+            DEBUG_LOG("OG-Meta failed: HTTP status != 200")
             return None
 
         soup = BeautifulSoup(res.text, "html.parser")
@@ -479,7 +518,11 @@ def _strategy_og_meta(clean: str) -> dict | None:
         raw_desc = (desc_meta or {}).get("content", "") if desc_meta else ""
         profile_image = (image_meta or {}).get("content", "") if image_meta else ""
 
+        DEBUG_LOG(f"OG-Meta raw_title: {raw_title!r}")
+        DEBUG_LOG(f"OG-Meta raw_desc: {raw_desc!r}")
+
         if not raw_title or "User Profile Not Found" in raw_title or "404" in raw_title:
+            DEBUG_LOG("OG-Meta failed: Title empty or indicates 404/Not Found")
             return None
 
         name_m = re.search(r"^(.*?)\s*\(@", raw_title)
@@ -490,25 +533,29 @@ def _strategy_og_meta(clean: str) -> dict | None:
         followers = parse_number(followers_m.group(1)) if followers_m else 0
         following = parse_number(following_m.group(1)) if following_m else 0
         account_age_days = _parse_joined_meta(raw_desc)
-        posts = max(1, int(followers * 0.5 + following * 0.8))
 
-        return _build_result(
+        DEBUG_LOG(f"OG-Meta parsed -> name={name!r}, followers={followers}, following={following}, age={account_age_days}")
+
+        res_dict = _build_result(
             clean=clean,
             name=name,
             followers=followers,
             following=following,
-            tweet_count=posts,
+            tweet_count=0,
             bio=raw_desc or f"Twitter account @{clean}",
             location="Unknown",
             verified="verified" in raw_title.lower(),
             profile_image=profile_image,
             account_age_days=account_age_days,
-            avg_hashtags=1.2,
-            likes_per_post=round(max(1, followers * 0.1), 2),
+            avg_hashtags=0.0,
+            likes_per_post=0.0,
             recent_posts=[],
+            engagement_data_available=False,
         )
+        DEBUG_LOG(f"OG-Meta SUCCESS: result={res_dict}")
+        return res_dict
     except Exception as e:
-        print(f"[twitter_service] OG-meta strategy failed for @{clean}: {e}")
+        DEBUG_LOG(f"OG-Meta strategy EXCEPTION for @{clean}: {e}")
         return None
 
 
@@ -516,8 +563,10 @@ def _strategy_og_meta(clean: str) -> dict | None:
 # Strategy 3: RapidAPI real-time Twitter scraper
 # ---------------------------------------------------------------------------
 def _strategy_rapidapi(clean: str) -> dict | None:
+    DEBUG_LOG(f"Attempting Strategy: RapidAPI for '@{clean}'...")
     api_key = _get_rapidapi_key()
     if not api_key:
+        DEBUG_LOG("RapidAPI skipped: No RAPIDAPI_KEY set")
         return None
     headers = {
         "x-rapidapi-key": api_key,
@@ -530,12 +579,14 @@ def _strategy_rapidapi(clean: str) -> dict | None:
             headers=headers,
             timeout=12,
         )
+        DEBUG_LOG(f"RapidAPI HTTP status: {res.status_code}")
         if res.status_code != 200:
             return None
 
         data = res.json()
         user = data.get("data", {}).get("user", {}).get("result") or data.get("user")
         if not user:
+            DEBUG_LOG("RapidAPI failed: No user object in JSON response")
             return None
 
         legacy = user.get("legacy", user)
@@ -543,7 +594,7 @@ def _strategy_rapidapi(clean: str) -> dict | None:
         created_at = legacy.get("created_at", "")
         account_age_days = _parse_created_at(created_at) if created_at else 730
 
-        return _build_result(
+        res_dict = _build_result(
             clean=clean,
             name=legacy.get("name", clean),
             followers=legacy.get("followers_count", 0),
@@ -558,16 +609,18 @@ def _strategy_rapidapi(clean: str) -> dict | None:
             likes_per_post=0.0,
             recent_posts=[],
         )
+        DEBUG_LOG(f"RapidAPI SUCCESS: result={res_dict}")
+        return res_dict
     except Exception as e:
-        print(f"[twitter_service] RapidAPI strategy failed for @{clean}: {e}")
+        DEBUG_LOG(f"RapidAPI strategy EXCEPTION for @{clean}: {e}")
         return None
 
 
 # ---------------------------------------------------------------------------
 # Strategy 4: DuckDuckGo Search Scrape Fallback
-# Parses real follower count and bio from public web search snippets if Twitter APIs fail
 # ---------------------------------------------------------------------------
 def _strategy_search_scrape(clean: str) -> dict | None:
+    DEBUG_LOG(f"Attempting Strategy: Search-Scrape for '@{clean}'...")
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -576,76 +629,86 @@ def _strategy_search_scrape(clean: str) -> dict | None:
         "Accept-Language": "en-US,en;q=0.9",
     }
     try:
-        url = f"https://html.duckduckgo.com/html/?q={clean}+twitter+followers"
+        url = f"https://html.duckduckgo.com/html/?q=site:twitter.com+{clean}+followers"
         res = requests.get(url, headers=headers, timeout=8)
+        DEBUG_LOG(f"Search-Scrape HTTP status: {res.status_code}")
         if res.status_code != 200:
+            DEBUG_LOG("Search-Scrape failed: HTTP status != 200")
             return None
 
         soup = BeautifulSoup(res.text, "html.parser")
         snippets = " ".join([a.text for a in soup.find_all("a", class_="result__snippet")])
+        DEBUG_LOG(f"Search-Scrape raw snippets (first 300 chars): {snippets[:300]!r}")
         if not snippets:
+            DEBUG_LOG("Search-Scrape failed: No snippets found")
             return None
 
+        # Require explicit mention of the follower/following count attached to Followers keyword
         followers_m = re.search(r"([\d.,]+[KMBkmb]?)\s+[Ff]ollowers", snippets)
         following_m = re.search(r"([\d.,]+[KMBkmb]?)\s+[Ff]ollowing", snippets)
 
         followers = parse_number(followers_m.group(1)) if followers_m else 0
         following = parse_number(following_m.group(1)) if following_m else 0
 
-        # If no followers parsed, check general numbers
-        if followers == 0:
-            m_gen = re.search(r"([\d.,]+[MmkK])\s", snippets)
-            if m_gen:
-                followers = parse_number(m_gen.group(1))
+        DEBUG_LOG(f"Search-Scrape followers_m: {followers_m.groups() if followers_m else None}, parsed: {followers}")
+        DEBUG_LOG(f"Search-Scrape following_m: {following_m.groups() if following_m else None}, parsed: {following}")
 
         if followers == 0 and following == 0:
+            DEBUG_LOG("Search-Scrape failed: Both followers and following parsed to 0 (no explicit count found)")
             return None
 
         name_m = re.search(rf"([A-Z][a-z]+\s+[A-Z][a-z]+)\s*\(@?{clean}\)?", snippets, re.I)
         name = name_m.group(1).strip() if name_m else clean.capitalize()
 
-        posts = max(100, int(followers * 0.05 + following * 0.5))
-
-        return _build_result(
+        res_dict = _build_result(
             clean=clean,
             name=name,
             followers=followers,
             following=following,
-            tweet_count=posts,
+            tweet_count=0,
             bio=f"Twitter account @{clean}",
             location="Unknown",
             verified=followers > 100_000,
             profile_image="",
             account_age_days=1000 if followers > 1000 else 365,
-            avg_hashtags=1.0,
-            likes_per_post=round(max(1.0, followers * 0.001), 2),
+            avg_hashtags=0.0,
+            likes_per_post=0.0,
             recent_posts=[],
+            engagement_data_available=False,
         )
+        DEBUG_LOG(f"Search-Scrape SUCCESS: result={res_dict}")
+        return res_dict
     except Exception as e:
-        print(f"[twitter_service] Search-scrape strategy failed for @{clean}: {e}")
+        DEBUG_LOG(f"Search-Scrape strategy EXCEPTION for @{clean}: {e}")
         return None
 
 
 # ---------------------------------------------------------------------------
 # Strategy 1: Real-Time Live Twitter/X API via fxTwitter
-# Gives real live data (followers, following, tweets, bio, avatar, verified status)
-# for ANY public handle on Twitter/X. Free, reliable, instant.
 # ---------------------------------------------------------------------------
 def _strategy_fxtwitter(clean: str) -> dict | None:
+    DEBUG_LOG(f"Attempting Strategy: fxTwitter for '@{clean}'...")
     headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
     try:
         url = f"https://api.fxtwitter.com/{clean}"
         res = requests.get(url, headers=headers, timeout=6)
+        DEBUG_LOG(f"fxTwitter HTTP status: {res.status_code}")
         if res.status_code != 200:
+            DEBUG_LOG(f"fxTwitter failed: HTTP status {res.status_code}")
             return None
 
         data = res.json()
+        DEBUG_LOG(f"fxTwitter raw response JSON code: {data.get('code')}")
         if data.get("code") != 200:
+            DEBUG_LOG(f"fxTwitter failed: code != 200 in JSON (message: {data.get('message')})")
             return None
 
         u = data.get("user")
         if not u:
+            DEBUG_LOG("fxTwitter failed: No 'user' key in JSON response")
             return None
+
+        DEBUG_LOG(f"fxTwitter raw user dictionary: {u}")
 
         followers = int(u.get("followers", 0))
         following = int(u.get("following", 0))
@@ -668,7 +731,7 @@ def _strategy_fxtwitter(clean: str) -> dict | None:
         else:
             likes_per_post = raw_lpp
 
-        return _build_result(
+        res_dict = _build_result(
             clean=clean,
             name=u.get("name", clean),
             followers=followers,
@@ -683,8 +746,10 @@ def _strategy_fxtwitter(clean: str) -> dict | None:
             likes_per_post=likes_per_post,
             recent_posts=[],
         )
+        DEBUG_LOG(f"fxTwitter SUCCESS: result={res_dict}")
+        return res_dict
     except Exception as e:
-        print(f"[twitter_service] fxTwitter strategy failed for @{clean}: {e}")
+        DEBUG_LOG(f"fxTwitter strategy EXCEPTION for @{clean}: {e}")
         return None
 
 
@@ -692,66 +757,68 @@ def _strategy_fxtwitter(clean: str) -> dict | None:
 # Public interface
 # ---------------------------------------------------------------------------
 def fetch_twitter_profile(username: str) -> dict:
-    """
-    Fetch a live Twitter/X profile. Tries strategies in optimal order:
-      1. Real-Time fxTwitter API (live Twitter API data for ANY real account)
-      2. Demo Presets (for synthetic test bots like @shadow_bot_99)
-      3. RapidAPI scraper (if RAPIDAPI_KEY is in .env)
-      4. Syndication / OG meta / Search scrape fallbacks
-
-    Results are cached in-memory for 10 minutes to avoid redundant calls.
-    Returns a dict with 'found': True on success, or 'found': False with 'error'.
-    """
     raw = username.lstrip("@").strip().lower()
     clean = HANDLE_ALIASES.get(raw, raw)
+    DEBUG_LOG(f"=== fetch_twitter_profile called for raw='{raw}', clean='{clean}' ===")
 
     cache_key = f"profile:{clean}"
     cached = _cache_get(cache_key)
     if cached:
-        print(f"[twitter_service] cache hit for @{clean}")
+        DEBUG_LOG(f"CACHE HIT for key '{cache_key}': {cached}")
         return cached
 
-    # Strategy 1 — Try live fxTwitter API first (gets real-time stats for any real account)
+    DEBUG_LOG(f"Cache miss for '{cache_key}'")
+
+    # Strategy 1 — Try live fxTwitter API first
     result = _strategy_fxtwitter(clean)
+    if not _is_valid_profile_result(result):
+        result = None
 
     # Strategy 2 — Presets for known demo / synthetic profiles
     if result is None and clean in PRESET_PROFILES:
-        print(f"[twitter_service] returning preset profile for @{clean}")
-        return PRESET_PROFILES[clean]
+        DEBUG_LOG(f"Returning PRESET profile for '@{clean}'")
+        result = PRESET_PROFILES[clean]
 
     # Strategy 3 — RapidAPI / Syndication / OG meta / Search fallback
     if result is None:
         api_key = _get_rapidapi_key()
         if api_key:
-            result = _strategy_rapidapi(clean)
+            res = _strategy_rapidapi(clean)
+            if _is_valid_profile_result(res):
+                result = res
 
     if result is None:
-        result = _strategy_syndication(clean)
+        res = _strategy_syndication(clean)
+        if _is_valid_profile_result(res):
+            result = res
 
     if result is None:
-        result = _strategy_og_meta(clean)
-
-    if result and result.get("followers", 0) == 0:
-        search_res = _strategy_search_scrape(clean)
-        if search_res and search_res.get("followers", 0) > 0:
-            result["followers"] = search_res["followers"]
-            result["following"] = search_res.get("following", result["following"])
-            result["verified"] = search_res.get("verified", result["verified"])
+        res = _strategy_og_meta(clean)
+        if _is_valid_profile_result(res):
+            result = res
 
     if result is None:
-        result = _strategy_search_scrape(clean)
+        res = _strategy_search_scrape(clean)
+        if _is_valid_profile_result(res):
+            result = res
 
     # Fallback to variant handles if needed
     if result is None:
         fallback = re.sub(r"[\d_]+$", "", raw)
+        DEBUG_LOG(f"All strategies failed for '{clean}'. Checking fallback handle: '{fallback}'...")
         if fallback and fallback != clean and len(fallback) >= 3:
-            result = _strategy_fxtwitter(fallback)
-            if result is None and fallback in PRESET_PROFILES:
+            res = _strategy_fxtwitter(fallback)
+            if _is_valid_profile_result(res):
+                result = res
+            elif fallback in PRESET_PROFILES:
+                DEBUG_LOG(f"Returning PRESET profile for fallback handle '@{fallback}'")
                 result = PRESET_PROFILES[fallback]
 
     if result is None:
+        DEBUG_LOG(f"ALL strategies FAILED for '@{raw}'")
         return {"found": False, "error": f"Profile @{raw} not found on Twitter/X"}
 
+    DEBUG_LOG(f"FINAL RESULT for '@{raw}': {result}")
     _cache_set(cache_key, result)
     return result
 

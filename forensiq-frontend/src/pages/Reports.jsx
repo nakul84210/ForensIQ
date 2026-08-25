@@ -15,48 +15,6 @@ import {
   CheckCircle2
 } from 'lucide-react'
 
-const mockReports = [
-  {
-    id: 'RPT-001',
-    username: '@shadow_bot_99',
-    platform: 'Twitter',
-    riskScore: 92,
-    status: 'Fake',
-    generatedAt: 'Jul 4, 2026 • 9:00 PM',
-    features: 8,
-    models: 4,
-  },
-  {
-    id: 'RPT-002',
-    username: '@crypto_pump_bot',
-    platform: 'Twitter',
-    riskScore: 96,
-    status: 'Fake',
-    generatedAt: 'Jul 4, 2026 • 7:30 PM',
-    features: 8,
-    models: 4,
-  },
-  {
-    id: 'RPT-003',
-    username: '@news_spreader',
-    platform: 'Instagram',
-    riskScore: 78,
-    status: 'Suspicious',
-    generatedAt: 'Jul 4, 2026 • 6:15 PM',
-    features: 8,
-    models: 4,
-  },
-  {
-    id: 'RPT-004',
-    username: '@john_doe_real',
-    platform: 'Twitter',
-    riskScore: 12,
-    status: 'Real',
-    generatedAt: 'Jul 4, 2026 • 5:00 PM',
-    features: 8,
-    models: 4,
-  },
-]
 
 const statusStyles = {
   Fake: 'bg-rose-50 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 border-rose-200/60 dark:border-rose-900/60',
@@ -77,7 +35,8 @@ const riskBarBg = (score) => {
 }
 
 export default function Reports() {
-  const [reports, setReports] = useState(mockReports)
+  const [reports, setReports] = useState([])
+  const [isSampleData, setIsSampleData] = useState(false)
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('All')
   const [downloading, setDownloading] = useState(null)
@@ -90,8 +49,13 @@ export default function Reports() {
   const fetchReports = async () => {
     try {
       const res = await getAllReports()
-      if (res.data && res.data.length > 0) {
-        const mapped = res.data.map((item, idx) => ({
+      const responseData = res.data || {}
+      const reportsList = responseData.reports || res.data || []
+      const sampleFlag = responseData.is_sample_data || false
+      setIsSampleData(sampleFlag)
+
+      if (Array.isArray(reportsList) && reportsList.length > 0) {
+        const mapped = reportsList.map((item, idx) => ({
           id: item.id || `RPT-00${idx + 1}`,
           username: item.username.startsWith('@') ? item.username : '@' + item.username,
           platform: item.platform || 'Twitter',
@@ -104,7 +68,7 @@ export default function Reports() {
         setReports(mapped)
       }
     } catch (err) {
-      console.log('Using default preset reports')
+      console.log('Failed to load reports:', err)
     }
   }
 
@@ -134,6 +98,17 @@ export default function Reports() {
           Archived PDF evidence dossiers containing ML model predictions, SHAP feature weights, and network graph topology proofs.
         </p>
       </div>
+
+      {/* Sample Data Banner */}
+      {isSampleData && (
+        <div className="bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/60 rounded-2xl p-4 flex items-center gap-3">
+          <AlertTriangle className="w-5 h-5 text-amber-500 flex-shrink-0" />
+          <div>
+            <p className="text-sm font-bold text-amber-700 dark:text-amber-400">Showing Sample Data</p>
+            <p className="text-xs text-amber-600 dark:text-amber-500">No real analyses have been performed yet. The reports below are sample data for demonstration purposes. Analyze real profiles to generate actual reports.</p>
+          </div>
+        </div>
+      )}
 
       {/* Summary Metrics */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">

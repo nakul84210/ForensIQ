@@ -16,6 +16,7 @@ class ProfileRequest(BaseModel):
     likes_per_post: float = 0
     verified: bool = False
     posts_per_day: float = 0
+    location: str = "Unknown"
 
 @router.post("/score")
 async def score(data: ProfileRequest):

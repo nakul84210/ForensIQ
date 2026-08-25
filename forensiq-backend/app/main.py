@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.database import connect_db, close_db
-from app.routers import auth, analyze, reports, deepfake, similarity, credibility, metrics
+from app.routers import auth, analyze, reports, deepfake, similarity, credibility, metrics, network
 
 app = FastAPI(
     title="ForensIQ API",
@@ -33,6 +33,7 @@ app.include_router(deepfake.router, prefix="/api/deepfake", tags=["Deepfake"])
 app.include_router(similarity.router, prefix="/api/similarity", tags=["Similarity"])
 app.include_router(credibility.router, prefix="/api/credibility", tags=["Credibility"])
 app.include_router(metrics.router, prefix="/api/metrics", tags=["Metrics"])
+app.include_router(network.router, prefix="/api/network", tags=["Network"])
 
 @app.on_event("startup")
 async def startup():

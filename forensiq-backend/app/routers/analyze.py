@@ -55,6 +55,7 @@ async def run_analysis(profile: dict, db) -> dict:
         "data_source": profile.get("dataset_source", "manual"),
         "matched_from_dataset": profile.get("dataset_source") == "cresci_2017_synthetic",
         "from_twitter_api": profile.get("dataset_source") in ["live_twitter", "twitter_api_live"],
+        "engagement_data_available": result.get("engagement_data_available", True),
     }
 
 @router.get("/search/{username}")

@@ -179,6 +179,8 @@ def extract_features(profile: dict) -> dict:
         "language_switches":     text_signals["language_switches"],
         # Credibility
         "name_username_similarity": name_username_sim,
+        # Data availability flag (not a model feature, used for confidence adjustment)
+        "_engagement_data_available": bool(profile.get("engagement_data_available", True)),
     }
 
 
@@ -270,18 +272,24 @@ def rule_based_score(features: dict) -> tuple:
         score += 8; reasons.append("Bio contains link combined with promotional language")
 
     # --- Engagement (likes per post vs followers) ---
-    lpp = features["likes_per_post"]
-    fol = features["followers"]
-    if lpp < 1 and 200 < fol < 100_000 and not features["verified"]:
-        score += 22; reasons.append("Near-zero engagement despite sizeable follower count")
-    elif lpp < 3 and 500 < fol < 100_000 and not features["verified"]:
-        score += 12
-    elif lpp > 500:
-        score -= 20
-    elif lpp > 100:
-        score -= 12
-    elif lpp > 30:
-        score -= 6
+    # Skip engagement-based scoring when engagement data is unavailable
+    # (e.g. from OG-meta or search-scrape fallback strategies)
+    _engagement_available = features.get("_engagement_data_available", True)
+    if _engagement_available:
+        lpp = features["likes_per_post"]
+        fol = features["followers"]
+        if lpp < 1 and 200 < fol < 100_000 and not features["verified"]:
+            score += 22; reasons.append("Near-zero engagement despite sizeable follower count")
+        elif lpp < 3 and 500 < fol < 100_000 and not features["verified"]:
+            score += 12
+        elif lpp > 500:
+            score -= 20
+        elif lpp > 100:
+            score -= 12
+        elif lpp > 30:
+            score -= 6
+    else:
+        fol = features["followers"]
 
     # --- Mass follow with few followers ---
     if fol < 50 and features["following"] > 100:
@@ -545,6 +553,11 @@ def classify_profile(profile: dict) -> dict:
     else:
         status = "Real"
 
+    # Add confidence note when engagement data is unavailable
+    engagement_available = features.get("_engagement_data_available", True)
+    if not engagement_available:
+        reasons.append("Limited data: engagement metrics (posts, likes, hashtags) unavailable for this profile")
+
     return {
         "risk_score":       final_score,
         "status":           status,
@@ -554,4 +567,5 @@ def classify_profile(profile: dict) -> dict:
         "model_scores":     model_scores,
         "shap_values":      shap_vals,
         "shap_explanation": shap_explanation,
+        "engagement_data_available": engagement_available,
     }

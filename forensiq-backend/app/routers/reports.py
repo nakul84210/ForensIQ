@@ -50,10 +50,11 @@ async def get_all_reports():
         cursor = db.analyses.find({}, {"_id": 0}).sort("analyzed_at", -1).limit(50)
         results = await cursor.to_list(length=50)
         if results and len(results) > 0:
-            return results
+            return {"reports": results, "is_sample_data": False}
     except Exception as e:
         print(f"[reports] DB query failed: {e}")
-    return DEFAULT_MOCK_REPORTS
+    # Explicitly flag mock data so the frontend can display a banner
+    return {"reports": DEFAULT_MOCK_REPORTS, "is_sample_data": True}
 
 @router.get("/stats")
 async def get_stats():
@@ -64,7 +65,7 @@ async def get_stats():
             fake = await db.analyses.count_documents({"status": "Fake"})
             suspicious = await db.analyses.count_documents({"status": "Suspicious"})
             real = await db.analyses.count_documents({"status": "Real"})
-            return {"total": total, "fake": fake, "suspicious": suspicious, "real": real}
+            return {"total": total, "fake": fake, "suspicious": suspicious, "real": real, "is_sample_data": False}
     except Exception as e:
         print(f"[reports] Stats query failed: {e}")
-    return {"total": 4, "fake": 2, "suspicious": 1, "real": 1}
+    return {"total": 4, "fake": 2, "suspicious": 1, "real": 1, "is_sample_data": True}

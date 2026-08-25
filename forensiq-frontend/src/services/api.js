@@ -26,5 +26,6 @@ export const detectDeepfake = (formData) => api.post('/api/deepfake/detect', for
 })
 export const scanSimilarity = (data) => api.post('/api/similarity/scan', data)
 export const scoreCredibility = (data) => api.post('/api/credibility/score', data)
+export const getNetworkGraph = () => api.get('/api/network/graph')
 
 export default api
