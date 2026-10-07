@@ -1,5 +1,5 @@
 """
-train_model.py — Train ensemble bot detection models on 28 feature schema.
+train_model.py — Train ensemble bot detection models on 26 feature schema.
 
 Supports two data sources:
   1. Cresci-2017 benchmark dataset (default / recommended):
@@ -24,9 +24,15 @@ import csv
 import time
 import joblib
 import pandas as pd
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold
 from sklearn.metrics import accuracy_score, roc_auc_score, classification_report, precision_score, recall_score, f1_score
+
+try:
+    import xgboost as xgb
+    _XGB_AVAILABLE = True
+except ImportError:
+    _XGB_AVAILABLE = False
 
 try:
     from lightgbm import LGBMClassifier
@@ -56,7 +62,7 @@ def _save_cache(cache: dict) -> None:
 
 
 def fetch_labeled_dataset(rate_limit_seconds: float = 1.0) -> pd.DataFrame:
-    """Read labeled_profiles.csv, fetch live data for each user, and extract 28 features."""
+    """Read labeled_profiles.csv, fetch live data for each user, and extract 26 features."""
     if not os.path.exists(LABELED_CSV):
         raise FileNotFoundError(f"{LABELED_CSV} not found.")
 
@@ -112,7 +118,11 @@ def fetch_labeled_dataset(rate_limit_seconds: float = 1.0) -> pd.DataFrame:
 
 def train(df: pd.DataFrame, source_name: str = "cresci_2017"):
     """Fit RandomForest, XGBoost, and LightGBM models on feature DataFrame."""
-    X = df[FEATURE_ORDER].fillna(0)
+    # RF gets NaN filled with column medians — it cannot handle NaN natively.
+    # XGB and LGB receive the raw DataFrame with NaN intact so their native
+    # missing-value routing is learned from genuinely-no-tweet Cresci profiles.
+    X_raw = df[FEATURE_ORDER]     # preserves NaN for XGB/LGB
+    X_rf  = X_raw.fillna(X_raw.median())  # RF: impute with column median
     y = df["label"]
 
     n_bot  = int((y == 1).sum())
@@ -126,35 +136,46 @@ def train(df: pd.DataFrame, source_name: str = "cresci_2017"):
     if y.nunique() < 2:
         raise RuntimeError(f"Training requires both 'bot' AND 'real' examples. Got: {n_bot} bot, {n_real} real.")
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.20, random_state=42, stratify=y
+    X_train_rf,  X_test_rf,  y_train, y_test = train_test_split(
+        X_rf,  y, test_size=0.20, random_state=42, stratify=y
+    )
+    X_train_raw, X_test_raw, _,       _       = train_test_split(
+        X_raw, y, test_size=0.20, random_state=42, stratify=y
     )
 
+    # RandomForest: receives NaN-imputed data (RF cannot handle NaN natively)
     models = {
-        "random_forest": RandomForestClassifier(
+        "random_forest": (RandomForestClassifier(
             n_estimators=250, max_depth=10, min_samples_leaf=2, random_state=42
-        ),
-        "xgboost": GradientBoostingClassifier(
-            n_estimators=200, max_depth=4, learning_rate=0.05, random_state=42
-        ),
+        ), X_train_rf, X_test_rf),
     }
 
+    # XGBoost: real XGBClassifier with native NaN handling
+    if _XGB_AVAILABLE:
+        models["xgboost"] = (xgb.XGBClassifier(
+            n_estimators=200, max_depth=4, learning_rate=0.05,
+            random_state=42, eval_metric="logloss", verbosity=0,
+        ), X_train_raw, X_test_raw)
+    else:
+        print("[WARN] xgboost not installed — XGB model will not be trained")
+
     if _LGBM_AVAILABLE:
-        models["lightgbm"] = LGBMClassifier(
+        models["lightgbm"] = (LGBMClassifier(
             n_estimators=200, max_depth=6, learning_rate=0.05, random_state=42, verbose=-1
-        )
+        ), X_train_raw, X_test_raw)
 
     cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
     metrics = {}
 
-    for name, model in models.items():
+    for name, (model, X_tr, X_te) in models.items():
         print(f"--- Training {name.upper()} ---")
-        model.fit(X_train, y_train)
+        model.fit(X_tr, y_train)
 
-        preds = model.predict(X_test)
-        probs = model.predict_proba(X_test)[:, 1]
+        preds = model.predict(X_te)
+        probs = model.predict_proba(X_te)[:, 1]
 
-        cv_scores = cross_val_score(model, X, y, cv=cv, scoring="accuracy")
+        # CV uses the NaN-safe data for the respective model
+        cv_scores = cross_val_score(model, X_tr, y_train, cv=cv, scoring="accuracy")
 
         test_acc = accuracy_score(y_test, preds)
         test_prec = precision_score(y_test, preds, zero_division=0)
@@ -180,15 +201,17 @@ def train(df: pd.DataFrame, source_name: str = "cresci_2017"):
             "test_auc":        round(test_auc, 4),
             "cv_accuracy_mean": round(cv_scores.mean(), 4),
             "cv_accuracy_std":  round(cv_scores.std(), 4),
-            "n_train": len(X_train),
-            "n_test":  len(X_test),
+            "n_train": len(X_tr),
+            "n_test":  len(X_te),
         }
 
     # Save model artifacts
-    joblib.dump(models["random_forest"], os.path.join(_ML_DIR, "random_forest_model.pkl"))
-    joblib.dump(models["xgboost"],       os.path.join(_ML_DIR, "xgboost_model.pkl"))
+    if "random_forest" in models:
+        joblib.dump(models["random_forest"][0], os.path.join(_ML_DIR, "random_forest_model.pkl"))
+    if "xgboost" in models:
+        joblib.dump(models["xgboost"][0],       os.path.join(_ML_DIR, "xgboost_model.pkl"))
     if "lightgbm" in models:
-        joblib.dump(models["lightgbm"],  os.path.join(_ML_DIR, "lgbm_model.pkl"))
+        joblib.dump(models["lightgbm"][0],      os.path.join(_ML_DIR, "lgbm_model.pkl"))
     joblib.dump(FEATURE_ORDER,           os.path.join(_ML_DIR, "features.pkl"))
 
     metrics["trained_on"] = source_name

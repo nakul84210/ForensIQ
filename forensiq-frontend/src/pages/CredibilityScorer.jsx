@@ -1,6 +1,5 @@
 import { useState } from 'react'
-import axios from 'axios'
-import { scoreCredibility } from '../services/api'
+import { scoreCredibility, searchProfile } from '../services/api'
 import {
   CheckCircle2,
   Search,
@@ -59,7 +58,7 @@ export default function CredibilityScorer() {
 
     const clean = targetUser.replace('@', '').trim()
     try {
-      const search = await axios.get(`http://localhost:8000/api/analyze/search/${clean}`)
+      const search = await searchProfile(clean)
       if (search.data.found) {
         const p = search.data.profile
         const res = await scoreCredibility({
@@ -173,7 +172,7 @@ export default function CredibilityScorer() {
 
         <div className="flex items-center gap-2 pt-3 text-xs">
           <span className="font-bold text-slate-400">Quick Test:</span>
-          {['nakul_indurkar', 'shadow_bot_99', 'john_doe_real'].map((preset) => (
+          {['elonmusk', 'shadow_bot_99', 'verified_user'].map((preset) => (
             <button
               key={preset}
               type="button"

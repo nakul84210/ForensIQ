@@ -9,6 +9,11 @@ class Settings(BaseSettings):
     TWITTER_BEARER_TOKEN: str = ""
     TWITTER_CONSUMER_KEY: str = ""
     TWITTER_CONSUMER_SECRET: str = ""
+    ANTHROPIC_API_KEY: str = ""
+    ANTHROPIC_WORKSPACE_ID: str = ""
+    ANTHROPIC_MODEL: str = "claude-3-7-sonnet-20250219"
+    GROQ_API_KEY: str = ""
+    GROQ_MODEL: str = "qwen/qwen3.8-27b"
 
     class Config:
         env_file = ".env"

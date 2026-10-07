@@ -45,14 +45,6 @@ def _cache_set(key: str, value: dict) -> None:
     _CACHE[key] = (value, time.monotonic() + _CACHE_TTL_SECONDS)
 
 
-# ---------------------------------------------------------------------------
-# Username alias map — maps typo/variant handles to the real Twitter handle.
-# Add entries here if you know a user's real handle differs from what they type.
-# ---------------------------------------------------------------------------
-HANDLE_ALIASES: dict[str, str] = {
-    "nakulpradip84": "nakulpradip",
-    "nakul_indurkar": "nakulpradip",
-}
 
 
 def parse_number(val: str) -> int:
@@ -77,11 +69,12 @@ def _build_result(clean: str, name: str, followers: int, following: int,
                   profile_image: str, account_age_days: int,
                   avg_hashtags: float, likes_per_post: float,
                   recent_posts: list,
-                  engagement_data_available: bool = True) -> dict:
+                  engagement_data_available: bool = True,
+                  dataset_source: str = "live_twitter") -> dict:
     posts_per_day = round(tweet_count / max(account_age_days, 1), 2)
     return {
         "found": True,
-        "source": "live_twitter",
+        "source": dataset_source,
         "username": clean,
         "name": name,
         "platform": "Twitter",
@@ -98,7 +91,7 @@ def _build_result(clean: str, name: str, followers: int, following: int,
         "profile_image": profile_image,
         "recent_posts": recent_posts,
         "label": "unknown",
-        "dataset_source": "live_twitter",
+        "dataset_source": dataset_source,
         "engagement_data_available": engagement_data_available,
     }
 
@@ -128,8 +121,12 @@ def _parse_joined_meta(raw_desc: str) -> int:
 # Presets for high-profile accounts & demo accounts
 # Ensures accurate profile data even if Twitter API / scrapers fail or rate-limit
 # ---------------------------------------------------------------------------
+def _build_preset(**kwargs) -> dict:
+    kwargs["dataset_source"] = "preset_profile"
+    return _build_result(**kwargs)
+
 PRESET_PROFILES: dict[str, dict] = {
-    "narendramodi": _build_result(
+    "narendramodi": _build_preset(
         clean="narendramodi",
         name="Narendra Modi",
         followers=106_000_000,
@@ -148,7 +145,7 @@ PRESET_PROFILES: dict[str, dict] = {
             {"content": "Pleased to meet senior security officials. In a changing global landscape, we must address shared challenges together.", "likes": 12400, "time": "Recent"},
         ],
     ),
-    "elonmusk": _build_result(
+    "elonmusk": _build_preset(
         clean="elonmusk",
         name="Elon Musk",
         followers=210_000_000,
@@ -166,7 +163,7 @@ PRESET_PROFILES: dict[str, dict] = {
             {"content": "Free speech is the bedrock of a functioning democracy.", "likes": 120000, "time": "Recent"},
         ],
     ),
-    "realdonaldtrump": _build_result(
+    "realdonaldtrump": _build_preset(
         clean="realdonaldtrump",
         name="Donald J. Trump",
         followers=95_000_000,
@@ -183,7 +180,7 @@ PRESET_PROFILES: dict[str, dict] = {
             {"content": "MAKE AMERICA GREAT AGAIN!", "likes": 150000, "time": "Recent"},
         ],
     ),
-    "barackobama": _build_result(
+    "barackobama": _build_preset(
         clean="barackobama",
         name="Barack Obama",
         followers=131_000_000,
@@ -200,7 +197,7 @@ PRESET_PROFILES: dict[str, dict] = {
             {"content": "Michelle and I are wishing everyone a restful weekend.", "likes": 42000, "time": "Recent"},
         ],
     ),
-    "billgates": _build_result(
+    "billgates": _build_preset(
         clean="billgates",
         name="Bill Gates",
         followers=64_000_000,
@@ -217,7 +214,7 @@ PRESET_PROFILES: dict[str, dict] = {
             {"content": "Innovations in global health continue to inspire me every single day.", "likes": 12000, "time": "Recent"},
         ],
     ),
-    "taylorswift13": _build_result(
+    "taylorswift13": _build_preset(
         clean="taylorswift13",
         name="Taylor Swift",
         followers=95_000_000,
@@ -234,7 +231,7 @@ PRESET_PROFILES: dict[str, dict] = {
             {"content": "See you on tour!", "likes": 250000, "time": "Recent"},
         ],
     ),
-    "shadow_bot_99": _build_result(
+    "shadow_bot_99": _build_preset(
         clean="shadow_bot_99",
         name="Shadow Bot 99",
         followers=42,
@@ -253,7 +250,7 @@ PRESET_PROFILES: dict[str, dict] = {
             {"content": "Follow me follow back #followforfollow #follow #f4f #like4like", "likes": 1, "time": "4:02 AM"},
         ],
     ),
-    "crypto_pump_bot": _build_result(
+    "crypto_pump_bot": _build_preset(
         clean="crypto_pump_bot",
         name="Crypto Pump Alert Bot",
         followers=85,
@@ -271,7 +268,7 @@ PRESET_PROFILES: dict[str, dict] = {
             {"content": "JOIN TELEGRAM FOR INSIDER PUMP #btc #eth #memecoin", "likes": 0, "time": "1:02 AM"},
         ],
     ),
-    "john_doe_real": _build_result(
+    "john_doe_real": _build_preset(
         clean="john_doe_real",
         name="John Doe",
         followers=1450,
@@ -289,7 +286,7 @@ PRESET_PROFILES: dict[str, dict] = {
             {"content": "Morning coffee & code review routine.", "likes": 32, "time": "3 days ago"},
         ],
     ),
-    "news_spreader": _build_result(
+    "news_spreader": _build_preset(
         clean="news_spreader",
         name="Global News Flash Bot",
         followers=180,
@@ -306,7 +303,7 @@ PRESET_PROFILES: dict[str, dict] = {
             {"content": "SHOCKING NEWS BREAKING NOW YOU WONT BELIEVE THIS #breaking #news #viral", "likes": 0, "time": "2:10 AM"},
         ],
     ),
-    "nakulpradip": _build_result(
+    "nakulpradip": _build_preset(
         clean="nakulpradip",
         name="Nakul Indurkar",
         followers=450,
@@ -323,7 +320,7 @@ PRESET_PROFILES: dict[str, dict] = {
             {"content": "Building ML classifiers for social threat forensics!", "likes": 35, "time": "Recent"},
         ],
     ),
-    "satyanadella": _build_result(
+    "satyanadella": _build_preset(
         clean="satyanadella",
         name="Satya Nadella",
         followers=3_200_000,
@@ -340,7 +337,7 @@ PRESET_PROFILES: dict[str, dict] = {
             {"content": "Excited about the possibilities of AI in transforming industries and empowering every person.", "likes": 5400, "time": "Recent"},
         ],
     ),
-    "sundarpichai": _build_result(
+    "sundarpichai": _build_preset(
         clean="sundarpichai",
         name="Sundar Pichai",
         followers=5_400_000,
@@ -357,7 +354,7 @@ PRESET_PROFILES: dict[str, dict] = {
             {"content": "Reflecting on our latest AI innovations and how technology helps people everywhere.", "likes": 8200, "time": "Recent"},
         ],
     ),
-    "tim_cook": _build_result(
+    "tim_cook": _build_preset(
         clean="tim_cook",
         name="Tim Cook",
         followers=14_500_000,
@@ -374,7 +371,7 @@ PRESET_PROFILES: dict[str, dict] = {
             {"content": "Thrilled to share our latest product updates with our incredible community.", "likes": 22000, "time": "Recent"},
         ],
     ),
-    "samaltman": _build_result(
+    "samaltman": _build_preset(
         clean="samaltman",
         name="Sam Altman",
         followers=3_800_000,
@@ -724,12 +721,17 @@ def _strategy_fxtwitter(clean: str) -> dict | None:
         ver_dict = u.get("verification", {}) or {}
         verified = bool(ver_dict.get("verified", False) or ver_dict.get("type") == "individual")
 
-        likes_total = int(u.get("likes", 0))
-        raw_lpp = round(likes_total / max(tweets, 1), 2)
-        if (verified or followers > 10_000) and raw_lpp < 1.0:
-            likes_per_post = max(raw_lpp, round(followers * 0.001, 2))
-        else:
-            likes_per_post = raw_lpp
+        # NOTE: fxTwitter's `likes` field is the total number of tweets this user
+        # has LIKED (given to others) — it is NOT engagement received on their own posts.
+        # Using it as likes_per_post would produce completely wrong values (e.g. Elon
+        # gets 2.28 instead of hundreds of thousands). Since we have no per-post
+        # engagement data from this endpoint, we set engagement_data_available=False
+        # so the rule-based scorer skips engagement-dependent rules.
+        #
+        # Similarly, this endpoint returns user metadata only — no recent tweet content.
+        # All tweet-content features (hashtag count, template score, url density, etc.)
+        # will be zero, which is correct — mark engagement unavailable so heuristics
+        # don't penalise the account for "near-zero engagement despite sizeable followers".
 
         res_dict = _build_result(
             clean=clean,
@@ -742,9 +744,10 @@ def _strategy_fxtwitter(clean: str) -> dict | None:
             verified=verified,
             profile_image=profile_image,
             account_age_days=account_age_days,
-            avg_hashtags=0.5,
-            likes_per_post=likes_per_post,
+            avg_hashtags=0.0,
+            likes_per_post=0.0,
             recent_posts=[],
+            engagement_data_available=False,
         )
         DEBUG_LOG(f"fxTwitter SUCCESS: result={res_dict}")
         return res_dict
@@ -758,8 +761,8 @@ def _strategy_fxtwitter(clean: str) -> dict | None:
 # ---------------------------------------------------------------------------
 def fetch_twitter_profile(username: str) -> dict:
     raw = username.lstrip("@").strip().lower()
-    clean = HANDLE_ALIASES.get(raw, raw)
-    DEBUG_LOG(f"=== fetch_twitter_profile called for raw='{raw}', clean='{clean}' ===")
+    clean = raw
+    DEBUG_LOG(f"=== fetch_twitter_profile called for '{raw}' ===")
 
     cache_key = f"profile:{clean}"
     cached = _cache_get(cache_key)
@@ -817,6 +820,44 @@ def fetch_twitter_profile(username: str) -> dict:
     if result is None:
         DEBUG_LOG(f"ALL strategies FAILED for '@{raw}'")
         return {"found": False, "error": f"Profile @{raw} not found on Twitter/X"}
+
+    # ── Supplementary Syndication backfill for recent_posts ─────────────────
+    # Most primary strategies (fxTwitter, RapidAPI, OG-meta) return only user
+    # metadata — they hard-code recent_posts=[]. Syndication is the only
+    # strategy that actually fetches tweet text. If the primary strategy
+    # resolved the profile but left recent_posts empty, try a supplementary
+    # Syndication call specifically to backfill post content.
+    #
+    # Contract:
+    #   - All metadata from the primary strategy is preserved as-is.
+    #   - Only recent_posts (and its derived metrics avg_hashtags /
+    #     likes_per_post) are merged in from Syndication, and only when
+    #     Syndication returns a non-empty list.
+    #   - If Syndication also fails or returns nothing, recent_posts stays [].
+    #   - This runs on every resolution path, including presets that were
+    #     resolved from db.profiles (they may already have posts, in which
+    #     case the guard below short-circuits immediately).
+    if result.get("found") and not result.get("recent_posts"):
+        DEBUG_LOG(f"Primary strategy returned empty recent_posts for @{clean} — trying Syndication backfill")
+        try:
+            syn = _strategy_syndication(clean)
+            if syn and syn.get("recent_posts"):
+                result = dict(result)   # don't mutate the original
+                result["recent_posts"] = syn["recent_posts"]
+                # Merge engagement metrics derived from the posts
+                if syn.get("avg_hashtags", 0.0) > 0:
+                    result["avg_hashtags"] = syn["avg_hashtags"]
+                if syn.get("likes_per_post", 0.0) > 0:
+                    result["likes_per_post"] = syn["likes_per_post"]
+                DEBUG_LOG(
+                    f"Syndication backfill SUCCESS for @{clean}: "
+                    f"{len(result['recent_posts'])} posts backfilled"
+                )
+            else:
+                DEBUG_LOG(f"Syndication backfill returned nothing for @{clean} — keeping recent_posts=[]")
+        except Exception as e:
+            # Never let a failed backfill kill the primary result
+            DEBUG_LOG(f"Syndication backfill EXCEPTION for @{clean}: {e} — ignoring")
 
     DEBUG_LOG(f"FINAL RESULT for '@{raw}': {result}")
     _cache_set(cache_key, result)

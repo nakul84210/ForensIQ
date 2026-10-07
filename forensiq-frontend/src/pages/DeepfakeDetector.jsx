@@ -65,6 +65,7 @@ export default function DeepfakeDetector() {
   const [preview, setPreview] = useState(null)
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState(null)
+  const [error, setError] = useState(null)
   const [dragOver, setDragOver] = useState(false)
   const fileRef = useRef(null)
 
@@ -87,6 +88,7 @@ export default function DeepfakeDetector() {
     if (!image) return
     setLoading(true)
     setResult(null)
+    setError(null)
 
     try {
       const formData = new FormData()
@@ -95,7 +97,8 @@ export default function DeepfakeDetector() {
       setResult(res.data)
     } catch (err) {
       console.error('Deepfake detection error:', err)
-      setResult(mockAnalysis)
+      const msg = err?.response?.data?.detail || err?.message || 'Backend error'
+      setError(`Analysis failed: ${msg}. Check that the backend is running.`)
     } finally {
       setLoading(false)
     }
@@ -105,6 +108,7 @@ export default function DeepfakeDetector() {
     setImage(null)
     setPreview(null)
     setResult(null)
+    setError(null)
   }
 
   const isReal = result && result.verdict === 'Likely Real'
@@ -135,13 +139,12 @@ export default function DeepfakeDetector() {
             onDragLeave={() => setDragOver(false)}
             onDrop={handleDrop}
             onClick={() => !preview && fileRef.current?.click()}
-            className={`flex-1 border-2 border-dashed rounded-3xl p-6 sm:p-8 flex flex-col items-center justify-center min-h-[300px] cursor-pointer transition-all duration-200 ${
-              dragOver
+            className={`flex-1 border-2 border-dashed rounded-3xl p-6 sm:p-8 flex flex-col items-center justify-center min-h-[300px] cursor-pointer transition-all duration-200 ${dragOver
                 ? 'border-indigo-500 bg-indigo-50/50 dark:bg-indigo-950/30'
                 : preview
-                ? 'border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 cursor-default'
-                : 'border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:border-indigo-500 dark:hover:border-indigo-500 hover:bg-slate-50 dark:hover:bg-slate-800/50'
-            }`}
+                  ? 'border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 cursor-default'
+                  : 'border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:border-indigo-500 dark:hover:border-indigo-500 hover:bg-slate-50 dark:hover:bg-slate-800/50'
+              }`}
           >
             <input
               ref={fileRef}
@@ -237,16 +240,26 @@ export default function DeepfakeDetector() {
 
       </div>
 
+      {/* Error State */}
+      {error && !loading && (
+        <div className="border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/30 rounded-2xl p-4 flex items-start gap-3">
+          <AlertTriangle className="w-5 h-5 text-rose-500 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-bold text-rose-700 dark:text-rose-400">Detection Failed</p>
+            <p className="text-xs text-rose-600 dark:text-rose-500 mt-0.5">{error}</p>
+          </div>
+        </div>
+      )}
+
       {/* Analysis Results Section */}
       {result && !loading && (
         <div className="space-y-6">
 
           {/* Verdict Card Banner */}
-          <div className={`border rounded-3xl p-6 sm:p-8 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-6 ${
-            isReal
+          <div className={`border rounded-3xl p-6 sm:p-8 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-6 ${isReal
               ? 'bg-emerald-50/60 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-900/60'
               : 'bg-rose-50/60 dark:bg-rose-950/30 border-rose-200 dark:border-rose-900/60'
-          }`}>
+            }`}>
             <div className="flex items-center gap-4">
               <div className={`p-4 rounded-2xl ${isReal ? 'bg-emerald-500 text-white' : 'bg-rose-500 text-white'} shadow-lg`}>
                 {isReal ? <CheckCircle2 className="w-8 h-8" /> : <AlertTriangle className="w-8 h-8" />}
@@ -258,8 +271,10 @@ export default function DeepfakeDetector() {
                 </h3>
                 <p className="text-xs text-slate-600 dark:text-slate-400 mt-1">
                   {isReal
-                    ? 'Image metadata & sensor noise signatures confirm authentic camera capture.'
-                    : `High probability of synthetic AI image generation (${result.model} architecture detected).`}
+                    ? 'Pixel-level forensic analysis found no strong indicators of synthetic AI generation.'
+                    : result.confidence >= 70
+                      ? 'Strong forensic indicators of AI/synthetic image generation detected.'
+                      : 'Some forensic indicators present — image may be AI-generated or heavily post-processed.'}
                 </p>
               </div>
             </div>

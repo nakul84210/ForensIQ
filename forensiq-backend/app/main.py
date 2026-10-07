@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.responses import ORJSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from app.database import connect_db, close_db
 from app.routers import auth, analyze, reports, deepfake, similarity, credibility, metrics, network
@@ -6,7 +7,8 @@ from app.routers import auth, analyze, reports, deepfake, similarity, credibilit
 app = FastAPI(
     title="ForensIQ API",
     description="Social Media Forensic Analysis Platform",
-    version="1.0.0"
+    version="1.0.0",
+    default_response_class=ORJSONResponse
 )
 
 app.add_middleware(

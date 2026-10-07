@@ -2,13 +2,15 @@
 fake_detector.py — Feature extraction, rule-based scoring, and ML classification.
 
 Architecture:
-  1. extract_features()    — builds 28-feature vector from a live profile dict
+  1. extract_features()    — builds 26-feature vector from a live profile dict
   2. rule_based_score()    — transparent heuristic scorer (always runs)
   3. _ml_score()           — RF + XGB + LGB ensemble (runs only if models trained)
   4. classify_profile()    — blends all signals, returns risk score + SHAP values
 
 Scoring blend (when models are trained):
-  0.35 × Random Forest + 0.35 × XGBoost + 0.30 × LightGBM
+  Equal weighting across loaded models, blended 50% ML / 50% heuristic.
+  When engagement_data_available=False, RF is excluded (it cannot handle NaN
+  natively); XGB + LGB are used at 25% ML / 75% heuristic.
 
 When models are not yet trained:
   100% rule-based, clearly flagged as such in the response.
@@ -17,6 +19,7 @@ When models are not yet trained:
 import re
 import os
 import math
+import numpy as np
 import joblib
 
 from app.ml.text_analyzer import analyze_profile_text
@@ -59,12 +62,29 @@ FEATURE_ORDER = [
     # --- Temporal features ---
     "posting_hour_entropy",
     # --- Profile features ---
-    "verified", "location_present", "default_profile_image",
+    "verified", "location_present",
+    # default_profile_image is intentionally excluded from FEATURE_ORDER (the ML model
+    # feature list). It was NaN in 99.7% of Cresci rows and had SHAP=0.0000 across all
+    # three models — a zombie feature for the ML ensemble. However, it IS still computed
+    # in extract_features() and used by rule_based_score() (+10 heuristic) which reads
+    # from the features dict directly. Do not remove it from extract_features().
     # --- Language features ---
     "language_switches",
     # --- Credibility ---
     "name_username_similarity",
 ]
+
+# Features derived from tweet content — set to NaN when engagement_data_available=False
+# so that XGB/LGB native NaN handling routes them correctly rather than treating
+# data-absence zeros identically to genuine-zero-activity profiles.
+_ENGAGEMENT_CONTENT_FEATURES = [
+    "avg_hashtags", "url_density", "hashtag_repetition", "avg_tweet_length",
+    "mention_density", "tweet_template_score", "posting_hour_entropy",
+    "language_switches",
+]
+# Also NaN when engagement unavailable: likes/engagement rate (fxTwitter fix B1
+# already zeroed these; NaN is more honest and correctly propagates through models)
+_ENGAGEMENT_RATE_FEATURES = ["likes_per_post", "engagement_rate"]
 
 
 def _shannon_entropy(s: str) -> float:
@@ -95,8 +115,11 @@ def _levenshtein_ratio(a: str, b: str) -> float:
 
 def extract_features(profile: dict) -> dict:
     """
-    Build a 28-feature vector from a live Twitter profile dict.
+    Build a 26-feature vector from a live Twitter profile dict.
     All features are floats in ranges interpretable by tree-based models.
+    Features that require tweet content are set to NaN when
+    engagement_data_available=False so that XGB/LGB NaN-routing is used
+    instead of treating missing data identically to genuine zero activity.
     """
     username     = profile.get("username", "")
     name         = profile.get("name", "")
@@ -142,7 +165,9 @@ def extract_features(profile: dict) -> dict:
         re.sub(r'[^a-z0-9]', '', username.lower()),
     )
 
-    return {
+    engagement_available = bool(profile.get("engagement_data_available", True))
+
+    feats = {
         # Network
         "followers":             followers,
         "following":             following,
@@ -179,9 +204,20 @@ def extract_features(profile: dict) -> dict:
         "language_switches":     text_signals["language_switches"],
         # Credibility
         "name_username_similarity": name_username_sim,
-        # Data availability flag (not a model feature, used for confidence adjustment)
-        "_engagement_data_available": bool(profile.get("engagement_data_available", True)),
+        # Internal flag — not a model feature, used for blend-weight and NaN encoding
+        "_engagement_data_available": engagement_available,
     }
+
+    # NaN-encode engagement features when tweet content is unavailable.
+    # This allows XGB/LGB to route these via their native NaN-handling splits,
+    # learned from genuinely-no-tweet Cresci profiles, rather than treating
+    # data-absence zeros identically to genuine zero-activity bots.
+    if not engagement_available:
+        for f in _ENGAGEMENT_CONTENT_FEATURES + _ENGAGEMENT_RATE_FEATURES:
+            if f in feats:
+                feats[f] = np.nan
+
+    return feats
 
 
 # ---------------------------------------------------------------------------
@@ -195,6 +231,7 @@ def rule_based_score(features: dict) -> tuple:
     """
     score = 0.0
     reasons = []
+    fol = features.get("followers", 0)
 
     # --- Follower / following ratio ---
     ratio = features["follower_ratio"]
@@ -277,7 +314,6 @@ def rule_based_score(features: dict) -> tuple:
     _engagement_available = features.get("_engagement_data_available", True)
     if _engagement_available:
         lpp = features["likes_per_post"]
-        fol = features["followers"]
         if lpp < 1 and 200 < fol < 100_000 and not features["verified"]:
             score += 22; reasons.append("Near-zero engagement despite sizeable follower count")
         elif lpp < 3 and 500 < fol < 100_000 and not features["verified"]:
@@ -288,8 +324,6 @@ def rule_based_score(features: dict) -> tuple:
             score -= 12
         elif lpp > 30:
             score -= 6
-    else:
-        fol = features["followers"]
 
     # --- Mass follow with few followers ---
     if fol < 50 and features["following"] > 100:
@@ -353,16 +387,23 @@ def _ml_score(features: dict) -> dict:
     Run features through all loaded ML models.
     Returns dict of {model_name: bot_probability_pct} for each available model.
     Returns empty dict if no models are loaded.
+
+    When engagement_data_available=False, RF is skipped entirely: it was trained
+    on median-imputed data and cannot handle NaN natively. Its result would be
+    discarded at the blend level anyway; skipping here avoids running a model on
+    data it wasn't designed to handle.
     """
     available = {}
     if _RF_MODEL is None and _XGB_MODEL is None and _LGB_MODEL is None:
         return available
 
+    engagement_available = features.get("_engagement_data_available", True)
+
     try:
         import pandas as pd
         row = pd.DataFrame([{k: features.get(k, 0) for k in FEATURE_ORDER}])
 
-        if _RF_MODEL is not None:
+        if _RF_MODEL is not None and engagement_available:
             try:
                 proba = _RF_MODEL.predict_proba(row)
                 # Handle models with only 1 class (stale synthetic training)
@@ -467,7 +508,8 @@ FEATURE_DISPLAY_NAMES = {
     "posting_hour_entropy": "Posting Schedule Entropy",
     "verified": "Verified Status",
     "location_present": "Location Present",
-    "default_profile_image": "Default Profile Image",
+    # default_profile_image is excluded from ML models (not in FEATURE_ORDER) so it
+    # never appears in SHAP output — no display name entry needed.
     "language_switches": "Language Switches",
     "name_username_similarity": "Name Similarity",
 }
@@ -483,7 +525,7 @@ def classify_profile(profile: dict) -> dict:
       risk_score        — 0–99 blended bot risk percentage
       status            — 'Real' | 'Suspicious' | 'Fake'
       reasons           — list of human-readable rule-based flag strings
-      features          — full 28-feature vector
+      features          — full 26-feature vector
       model_scores      — dict of per-model bot probabilities
       models_trained    — bool: whether real ML models are loaded
       shap_values       — per-feature SHAP contributions (None if not available)
@@ -493,22 +535,40 @@ def classify_profile(profile: dict) -> dict:
     rule_score, reasons = rule_based_score(features)
     ml_scores  = _ml_score(features)
 
-    # Filter out LightGBM if present to match target schema
-    ml_scores_clean = {k: v for k, v in ml_scores.items() if k != "lightgbm"}
-
-    models_trained = len(ml_scores_clean) > 0
+    # Use all available ML model predictions
+    models_trained = len(ml_scores) > 0
 
     if models_trained:
-        weights = {"random_forest": 0.50, "xgboost": 0.50}
-        total_w = sum(weights[k] for k in ml_scores_clean if k in weights)
-        ml_component = sum(
-            ml_scores_clean[k] * weights[k] for k in ml_scores_clean if k in weights
-        ) / total_w if total_w > 0 else rule_score
+        engagement_available = features.get("_engagement_data_available", True)
 
-        # 50% ML, 50% rule-based for balanced real-world stability
-        blended = 0.50 * ml_component + 0.50 * rule_score
+        # Blending strategy:
+        #
+        # When engagement data is available (tweet content + likes per post), all
+        # three models are included with equal weight. 50/50 ML/heuristic blend.
+        #
+        # When engagement data is NOT available, engagement-derived features are
+        # encoded as NaN so XGB/LGB route them via their native NaN-handling splits.
+        # RF cannot handle NaN natively — exclude it from the blend in this regime.
+        # Use only XGB + LGB (NaN-aware) at 25% ML / 75% heuristic, keeping the
+        # rule-based scorer as the primary signal when content data is absent.
+        if engagement_available:
+            active_scores = ml_scores                             # RF + XGB + LGB
+            ml_weight, rule_weight = 0.50, 0.50
+            blend_description = "Blended score: 50% rule-based heuristics + 50% ML ensemble (Random Forest, XGBoost, LightGBM)."
+        else:
+            active_scores = {k: v for k, v in ml_scores.items() # XGB + LGB only
+                             if k != "random_forest"}
+            ml_weight, rule_weight = 0.25, 0.75
+            blend_description = "Blended score: 75% rule-based heuristics + 25% ML (XGBoost + LightGBM average) — Random Forest excluded due to unavailable engagement data."
 
-        # Calibration for genuine verified / high-profile / low-risk accounts:
+        if not active_scores:                                     # fallback: all models
+            active_scores = ml_scores
+            ml_weight, rule_weight = 0.25, 0.75
+            blend_description = "Blended score: 75% rule-based heuristics + 25% ML ensemble average."
+
+        ml_component = sum(active_scores.values()) / len(active_scores)
+        blended = ml_weight * ml_component + rule_weight * rule_score
+        # Smooth moderation for verified / established organic profiles
         ver  = features.get("verified", 0)
         age  = features.get("account_age_days", 0)
         ppd  = features.get("posts_per_day", 0)
@@ -516,23 +576,26 @@ def classify_profile(profile: dict) -> dict:
         fing = features.get("following", 0)
         dig  = features.get("username_digit_ratio", 0)
 
-        if ver == 1 or fol > 100_000:
-            if rule_score == 0.0:
-                final_score = round(min(blended, 1.2), 1)
-            else:
-                final_score = round(min(blended, 12.0), 1)
-        elif age > 1000 and ppd < 1.0 and dig < 0.35 and fol < 1500 and fing < 1500:
-            final_score = round(min(max(blended - 45.0, 1.5), 99.0), 1)
+        # Apply mild credibility dampening only when heuristics also confirm low suspicion
+        if ver == 1 and rule_score < 15.0:
+            final_score = round(min(blended * 0.25, 12.0), 1)
+        elif fol > 100_000 and rule_score < 20.0 and fing < 5000:
+            final_score = round(min(blended * 0.35, 15.0), 1)
+        elif age > 1000 and ppd < 1.0 and dig < 0.35 and fol < 1500 and fing < 1500 and rule_score < 15.0:
+            final_score = round(min(max(blended * 0.50, 1.5), 99.0), 1)
         else:
             final_score = round(min(max(blended, 0.0), 99.0), 1)
 
-        model_scores = {"rule_based": round(rule_score, 1), **ml_scores_clean}
+        model_scores = {"rule_based": round(rule_score, 1), **ml_scores}
     else:
         final_score = round(min(max(rule_score, 0.0), 99.0), 1)
         model_scores = {"rule_based": round(rule_score, 1)}
+        blend_description = "Powered by rule-based heuristics. Train ML models (train_model.py) to add Random Forest, XGBoost, and LightGBM signals."
 
-    # SHAP — prefer RF, fall back to XGB
-    shap_model = _RF_MODEL or _XGB_MODEL
+    # SHAP — when engagement data is unavailable, prefer XGB (RF is excluded from
+    # the blend in that regime for the same reason it shouldn't drive SHAP).
+    engagement_available_for_shap = features.get("_engagement_data_available", True)
+    shap_model = (_XGB_MODEL or _RF_MODEL) if not engagement_available_for_shap else (_RF_MODEL or _XGB_MODEL)
     shap_vals = _shap_values(features, shap_model)
 
     shap_explanation = []
@@ -565,6 +628,7 @@ def classify_profile(profile: dict) -> dict:
         "features":         features,
         "models_trained":   models_trained,
         "model_scores":     model_scores,
+        "blend_description": blend_description,
         "shap_values":      shap_vals,
         "shap_explanation": shap_explanation,
         "engagement_data_available": engagement_available,

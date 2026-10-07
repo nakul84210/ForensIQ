@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { getAnalysisHistory, getReportStats, getTwitterBots } from '../services/api'
+import { getAnalysisHistory, getReportStats, getTwitterBots, getModelMetrics } from '../services/api'
 import {
   Search, Bot, FileText, Network, ArrowUpRight, TrendingUp,
   Scan, Radio, ExternalLink, ChevronRight, ShieldCheck,
@@ -8,27 +8,29 @@ import {
 } from 'lucide-react'
 
 const statusBadges = {
-  Fake:       'bg-red-50 text-red-600 border-red-200',
-  Real:       'bg-emerald-50 text-emerald-700 border-emerald-200',
+  Fake: 'bg-red-50 text-red-600 border-red-200',
+  Real: 'bg-emerald-50 text-emerald-700 border-emerald-200',
   Suspicious: 'bg-amber-50 text-amber-700 border-amber-200',
 }
-const statusIcons   = { Fake: ShieldAlert, Real: ShieldCheck, Suspicious: AlertTriangle }
+const statusIcons = { Fake: ShieldAlert, Real: ShieldCheck, Suspicious: AlertTriangle }
 const riskTextColor = (s) => s >= 55 ? 'text-red-600' : s >= 28 ? 'text-amber-600' : 'text-emerald-600'
-const riskBarBg     = (s) => s >= 55 ? 'bg-red-500'   : s >= 28 ? 'bg-amber-400'   : 'bg-emerald-500'
+const riskBarBg = (s) => s >= 55 ? 'bg-red-500' : s >= 28 ? 'bg-amber-400' : 'bg-emerald-500'
 
 export default function Dashboard() {
   const navigate = useNavigate()
-  const [history,      setHistory]      = useState([])
-  const [dbStats,      setDbStats]      = useState({ total: 0, fake: 0, suspicious: 0, real: 0 })
-  const [botCount,     setBotCount]     = useState(0)
+  const [history, setHistory] = useState([])
+  const [dbStats, setDbStats] = useState({ total: 0, fake: 0, suspicious: 0, real: 0 })
+  const [botCount, setBotCount] = useState(0)
+  const [modelMetrics, setModelMetrics] = useState(null)
   const [searchHandle, setSearchHandle] = useState('')
 
   useEffect(() => {
-    Promise.allSettled([getAnalysisHistory(), getReportStats(), getTwitterBots()])
-      .then(([h, s, b]) => {
+    Promise.allSettled([getAnalysisHistory(), getReportStats(), getTwitterBots(), getModelMetrics()])
+      .then(([h, s, b, m]) => {
         if (h.status === 'fulfilled') setHistory(h.value.data || [])
         if (s.status === 'fulfilled') setDbStats(s.value.data || {})
         if (b.status === 'fulfilled') setBotCount(b.value.data?.total || 0)
+        if (m.status === 'fulfilled') setModelMetrics(m.value.data || null)
       })
   }, [])
 
@@ -37,27 +39,24 @@ export default function Dashboard() {
     if (searchHandle.trim()) navigate(`/analyze?q=${searchHandle.trim().replace(/^@/, '')}`)
   }
 
-  const defaultAnalyses = [
-    { username: '@shadow_bot_99',   platform: 'Twitter',   risk_score: 92, status: 'Fake',       time: '2 mins ago',  followers: '142',   location: 'Russia' },
-    { username: '@john_doe_real',   platform: 'Twitter',   risk_score: 12, status: 'Real',       time: '15 mins ago', followers: '892',   location: 'USA' },
-    { username: '@news_spreader',   platform: 'Instagram', risk_score: 78, status: 'Suspicious', time: '1 hr ago',    followers: '12.4k', location: 'Brazil' },
-    { username: '@crypto_pump_bot', platform: 'Twitter',   risk_score: 96, status: 'Fake',       time: '2 hrs ago',   followers: '89',    location: 'Nigeria' },
-  ]
-
-  const displayAnalyses     = history.length > 0 ? history : defaultAnalyses
-  const totalAnalyzed       = dbStats.total > 0 ? dbStats.total : 1284
-  const totalFakeSuspicious = (dbStats.fake + dbStats.suspicious) > 0 ? (dbStats.fake + dbStats.suspicious) : 347
-  const totalBots           = botCount > 0 ? botCount : 70
-  const realPct  = Math.max(0, Math.round(((dbStats.real  || (totalAnalyzed - totalFakeSuspicious)) / totalAnalyzed) * 100))
-  const suspPct  = Math.max(0, Math.round(((dbStats.suspicious || 17) / totalAnalyzed) * 100))
-  const fakePct  = Math.max(0, 100 - realPct - suspPct)
+  const totalAnalyzed = dbStats.total || 0
+  const totalFakeSuspicious = (dbStats.fake || 0) + (dbStats.suspicious || 0)
+  const totalBots = botCount || 0
+  const realPct = totalAnalyzed > 0 ? Math.round(((dbStats.real || 0) / totalAnalyzed) * 100) : 0
+  const suspPct = totalAnalyzed > 0 ? Math.round(((dbStats.suspicious || 0) / totalAnalyzed) * 100) : 0
+  const fakePct = totalAnalyzed > 0 ? Math.max(0, 100 - realPct - suspPct) : 0
 
   const metrics = [
-    { label: 'Profiles Analyzed',   value: totalAnalyzed.toLocaleString(),        sub: 'Live DB History',    icon: Search },
-    { label: 'Fake / Bots Detected', value: totalFakeSuspicious.toLocaleString(),  sub: 'Cresci ML Filtered', icon: Bot },
-    { label: 'Evidence Reports',    value: (dbStats.total || 89).toLocaleString(), sub: 'MongoDB Persisted',  icon: FileText },
-    { label: 'Verified Bot Records', value: totalBots.toLocaleString(),             sub: 'Active Directory',   icon: Network },
+    { label: 'Profiles Analyzed', value: totalAnalyzed.toLocaleString(), sub: totalAnalyzed > 0 ? 'Live DB History' : 'No analyses yet', icon: Search },
+    { label: 'Fake / Bots Detected', value: totalFakeSuspicious.toLocaleString(), sub: 'Cresci ML Filtered', icon: Bot },
+    { label: 'Evidence Reports', value: totalAnalyzed.toLocaleString(), sub: 'MongoDB Persisted', icon: FileText },
+    { label: 'Verified Bot Records', value: totalBots.toLocaleString(), sub: 'Active Directory', icon: Network },
   ]
+
+  const rfAcc = modelMetrics?.random_forest?.test_accuracy ? `${(modelMetrics.random_forest.test_accuracy * 100).toFixed(2)}%` : '99.41%'
+  const xgbAcc = modelMetrics?.xgboost?.test_accuracy ? `${(modelMetrics.xgboost.test_accuracy * 100).toFixed(2)}%` : '99.28%'
+  const trainedOnCount = modelMetrics?.n_total_profiles || 7642
+  const featureCount = modelMetrics?.feature_count || 28
 
   return (
     <div className="space-y-6">
@@ -85,7 +84,7 @@ export default function Dashboard() {
             </h2>
             <p className="text-xs sm:text-sm leading-relaxed" style={{ color: 'rgba(255,255,255,0.55)' }}>
               ForensIQ AI engine is live — <strong className="text-white">{totalAnalyzed}</strong> target accounts analyzed
-              using XGBoost &amp; Random Forest with SHAP explainability.
+              using Gradient Boosting &amp; Random Forest with SHAP explainability.
             </p>
           </div>
 
@@ -157,13 +156,13 @@ export default function Dashboard() {
             </span>
           </div>
           <p className="text-xs text-slate-500 mb-5 leading-relaxed">
-            Trained on <strong>7,642</strong> profile vectors from the <strong>Cresci-2017</strong> benchmark dataset
-            across 27 features with real SHAP TreeExplainer explainability.
+            Trained on <strong>{trainedOnCount.toLocaleString()}</strong> profile vectors from the <strong>Cresci-2017</strong> benchmark dataset
+            across {featureCount} features with real SHAP TreeExplainer explainability.
           </p>
           <div className="grid grid-cols-2 gap-3 text-center">
             {[
-              { name: 'XGBoost',       acc: '99.02%' },
-              { name: 'Random Forest', acc: '98.89%' },
+              { name: 'Gradient Boosting', acc: xgbAcc },
+              { name: 'Random Forest', acc: rfAcc },
             ].map((m) => (
               <div
                 key={m.name}
@@ -196,9 +195,9 @@ export default function Dashboard() {
           </div>
           <div className="space-y-3 text-xs font-semibold">
             {[
-              { label: 'Authentic Real Accounts', dot: 'bg-emerald-500', count: dbStats.real || 33,        pct: realPct, color: 'text-emerald-700' },
-              { label: 'Suspicious Accounts',     dot: 'bg-amber-400',   count: dbStats.suspicious || 17,  pct: suspPct, color: 'text-amber-700'   },
-              { label: 'Fake / Spam Bots',        dot: 'bg-red-500',     count: dbStats.fake || 7,         pct: fakePct, color: 'text-red-600'     },
+              { label: 'Authentic Real Accounts', dot: 'bg-emerald-500', count: dbStats.real || 0, pct: realPct, color: 'text-emerald-700' },
+              { label: 'Suspicious Accounts', dot: 'bg-amber-400', count: dbStats.suspicious || 0, pct: suspPct, color: 'text-amber-700' },
+              { label: 'Fake / Spam Bots', dot: 'bg-red-500', count: dbStats.fake || 0, pct: fakePct, color: 'text-red-600' },
             ].map((r) => (
               <div key={r.label} className="flex items-center justify-between">
                 <span className="flex items-center gap-2 text-slate-600">
@@ -220,10 +219,10 @@ export default function Dashboard() {
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {[
-            { title: 'Profile Analyzer',  desc: 'Cresci ML + SHAP explainability',      path: '/analyze',  icon: Search,  badge: 'ML' },
-            { title: 'Deepfake Detector', desc: 'GAN artifact & ELA image forensics',    path: '/deepfake', icon: Scan,    badge: 'Vision' },
-            { title: 'Live Threat Feed',  desc: 'Real-time coordinated account stream',  path: '/threats',  icon: Radio,   badge: 'Live' },
-            { title: 'Network Graph',     desc: 'Spider web bot cluster visualization',  path: '/network',  icon: Network, badge: 'D3' },
+            { title: 'Profile Analyzer', desc: 'Cresci ML + SHAP explainability', path: '/analyze', icon: Search, badge: 'ML' },
+            { title: 'Deepfake Detector', desc: 'GAN artifact & ELA image forensics', path: '/deepfake', icon: Scan, badge: 'Vision' },
+            { title: 'Live Threat Feed', desc: 'Real-time coordinated account stream', path: '/threats', icon: Radio, badge: 'Live' },
+            { title: 'Network Graph', desc: 'Spider web bot cluster visualization', path: '/network', icon: Network, badge: 'D3' },
           ].map((t) => {
             const Icon = t.icon
             return (
@@ -271,87 +270,95 @@ export default function Dashboard() {
         </div>
 
         <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="border-b border-slate-100 text-slate-400 text-[11px] font-extrabold uppercase tracking-wider" style={{ background: 'rgba(245,158,11,0.03)' }}>
-                {['Username & Target', 'Platform', 'Location', 'Risk Score', 'Classification', 'Evaluated At', ''].map((h) => (
-                  <th key={h} className="pb-3 pt-3 px-5">{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 text-xs font-medium">
-              {displayAnalyses.map((item, idx) => {
-                const statusName = item.status || 'Real'
-                const StatusIcon = statusIcons[statusName] || ShieldCheck
-                const handleStr  = item.username
-                  ? (item.username.startsWith('@') ? item.username : `@${item.username}`)
-                  : '@target'
-                const riskVal = item.risk_score !== undefined ? item.risk_score : (item.risk || 0)
-                const timeStr = item.analyzed_at
-                  ? new Date(item.analyzed_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                  : (item.time || 'recently')
+          {history.length === 0 ? (
+            <div className="py-12 text-center text-slate-400">
+              <Search className="w-8 h-8 mx-auto mb-2 text-slate-300" />
+              <p className="text-xs font-semibold">No profile analyses recorded yet.</p>
+              <p className="text-[11px] text-slate-400 mt-0.5">Run a search or evaluate a profile in the Profile Analyzer to populate this record table.</p>
+            </div>
+          ) : (
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="border-b border-slate-100 text-slate-400 text-[11px] font-extrabold uppercase tracking-wider" style={{ background: 'rgba(245,158,11,0.03)' }}>
+                  {['Username & Target', 'Platform', 'Location', 'Risk Score', 'Classification', 'Evaluated At', ''].map((h) => (
+                    <th key={h} className="pb-3 pt-3 px-5">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-xs font-medium">
+                {history.map((item, idx) => {
+                  const statusName = item.status || 'Real'
+                  const StatusIcon = statusIcons[statusName] || ShieldCheck
+                  const handleStr = item.username
+                    ? (item.username.startsWith('@') ? item.username : `@${item.username}`)
+                    : '@target'
+                  const riskVal = item.risk_score !== undefined ? item.risk_score : (item.risk || 0)
+                  const timeStr = item.analyzed_at
+                    ? new Date(item.analyzed_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                    : (item.time || 'recently')
 
-                return (
-                  <tr
-                    key={(item.username || '') + idx}
-                    className="transition-colors"
-                    onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(245,158,11,0.03)' }}
-                    onMouseLeave={(e) => { e.currentTarget.style.background = '' }}
-                  >
-                    <td className="py-3.5 px-5">
-                      <div className="flex items-center gap-3">
-                        <div
-                          className="w-8 h-8 rounded-xl text-white font-bold text-xs flex items-center justify-center flex-shrink-0"
-                          style={{ background: 'linear-gradient(135deg, #1e3a5f, #0d1b2a)' }}
+                  return (
+                    <tr
+                      key={(item.username || '') + idx}
+                      className="transition-colors"
+                      onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(245,158,11,0.03)' }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = '' }}
+                    >
+                      <td className="py-3.5 px-5">
+                        <div className="flex items-center gap-3">
+                          <div
+                            className="w-8 h-8 rounded-xl text-white font-bold text-xs flex items-center justify-center flex-shrink-0"
+                            style={{ background: 'linear-gradient(135deg, #1e3a5f, #0d1b2a)' }}
+                          >
+                            {handleStr.charAt(1).toUpperCase()}
+                          </div>
+                          <div>
+                            <p className="font-bold text-slate-900">{handleStr}</p>
+                            <p className="text-[11px] text-slate-400">{item.followers ? `${item.followers} followers` : 'Evaluated'}</p>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="py-3.5 px-4">
+                        <span className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600 font-semibold text-[11px]">{item.platform || 'Twitter'}</span>
+                      </td>
+                      <td className="py-3.5 px-4 text-slate-500">📍 {item.location || 'Unknown'}</td>
+                      <td className="py-3.5 px-4 min-w-[130px]">
+                        <div className="flex items-center gap-2">
+                          <div className="w-16 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                            <div className={`h-full rounded-full ${riskBarBg(riskVal)}`} style={{ width: `${riskVal}%` }} />
+                          </div>
+                          <span className={`font-bold ${riskTextColor(riskVal)}`}>{riskVal}%</span>
+                        </div>
+                      </td>
+                      <td className="py-3.5 px-4">
+                        <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold border ${statusBadges[statusName] || statusBadges.Real}`}>
+                          <StatusIcon style={{ width: '11px', height: '11px' }} />
+                          {statusName}
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-4 text-slate-400">
+                        <div className="flex items-center gap-1">
+                          <Clock style={{ width: '13px', height: '13px' }} />
+                          {timeStr}
+                        </div>
+                      </td>
+                      <td className="py-3.5 px-4 text-right">
+                        <button
+                          onClick={() => navigate(`/analyze?q=${handleStr.replace('@', '')}`)}
+                          className="p-1.5 rounded-lg text-slate-400 transition"
+                          title="Re-analyze"
+                          onMouseEnter={(e) => { e.currentTarget.style.color = '#d97706'; e.currentTarget.style.background = 'rgba(245,158,11,0.1)' }}
+                          onMouseLeave={(e) => { e.currentTarget.style.color = ''; e.currentTarget.style.background = '' }}
                         >
-                          {handleStr.charAt(1).toUpperCase()}
-                        </div>
-                        <div>
-                          <p className="font-bold text-slate-900">{handleStr}</p>
-                          <p className="text-[11px] text-slate-400">{item.followers ? `${item.followers} followers` : 'Evaluated'}</p>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="py-3.5 px-4">
-                      <span className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600 font-semibold text-[11px]">{item.platform || 'Twitter'}</span>
-                    </td>
-                    <td className="py-3.5 px-4 text-slate-500">📍 {item.location || 'Unknown'}</td>
-                    <td className="py-3.5 px-4 min-w-[130px]">
-                      <div className="flex items-center gap-2">
-                        <div className="w-16 h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                          <div className={`h-full rounded-full ${riskBarBg(riskVal)}`} style={{ width: `${riskVal}%` }} />
-                        </div>
-                        <span className={`font-bold ${riskTextColor(riskVal)}`}>{riskVal}%</span>
-                      </div>
-                    </td>
-                    <td className="py-3.5 px-4">
-                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold border ${statusBadges[statusName] || statusBadges.Real}`}>
-                        <StatusIcon style={{ width: '11px', height: '11px' }} />
-                        {statusName}
-                      </span>
-                    </td>
-                    <td className="py-3.5 px-4 text-slate-400">
-                      <div className="flex items-center gap-1">
-                        <Clock style={{ width: '13px', height: '13px' }} />
-                        {timeStr}
-                      </div>
-                    </td>
-                    <td className="py-3.5 px-4 text-right">
-                      <button
-                        onClick={() => navigate(`/analyze?q=${handleStr.replace('@', '')}`)}
-                        className="p-1.5 rounded-lg text-slate-400 transition"
-                        title="Re-analyze"
-                        onMouseEnter={(e) => { e.currentTarget.style.color = '#d97706'; e.currentTarget.style.background = 'rgba(245,158,11,0.1)' }}
-                        onMouseLeave={(e) => { e.currentTarget.style.color = ''; e.currentTarget.style.background = '' }}
-                      >
-                        <ExternalLink style={{ width: '15px', height: '15px' }} />
-                      </button>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+                          <ExternalLink style={{ width: '15px', height: '15px' }} />
+                        </button>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          )}
         </div>
       </div>
     </div>

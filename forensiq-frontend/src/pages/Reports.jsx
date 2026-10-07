@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { getAllReports, getReportStats } from '../services/api'
+import { getAllReports, getReportStats, downloadReportPdf } from '../services/api'
 import {
   FileText,
   Search,
@@ -12,7 +12,8 @@ import {
   Clock,
   Layers,
   Sparkles,
-  CheckCircle2
+  CheckCircle2,
+  Loader2
 } from 'lucide-react'
 
 
@@ -40,6 +41,7 @@ export default function Reports() {
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('All')
   const [downloading, setDownloading] = useState(null)
+  const [downloadError, setDownloadError] = useState('')
   const navigate = useNavigate()
 
   useEffect(() => {
@@ -56,14 +58,14 @@ export default function Reports() {
 
       if (Array.isArray(reportsList) && reportsList.length > 0) {
         const mapped = reportsList.map((item, idx) => ({
-          id: item.id || `RPT-00${idx + 1}`,
+          id: item.id || `RPT-${idx + 1 < 10 ? '00' : '0'}${idx + 1}`,
+          analysisId: item.analysis_id || item.id || `RPT-${idx + 1 < 10 ? '00' : '0'}${idx + 1}`,
           username: item.username.startsWith('@') ? item.username : '@' + item.username,
           platform: item.platform || 'Twitter',
-          riskScore: item.risk_score || item.riskScore || 0,
+          riskScore: item.risk_score !== undefined ? Math.round(item.risk_score) : (item.riskScore || 0),
           status: item.status || 'Real',
           generatedAt: item.analyzed_at ? new Date(item.analyzed_at).toLocaleString() : 'Recent',
-          features: 8,
-          models: 2,
+          rawItem: item,
         }))
         setReports(mapped)
       }
@@ -78,12 +80,19 @@ export default function Reports() {
     return matchSearch && matchFilter
   })
 
-  const handleDownload = (id) => {
-    setDownloading(id)
-    setTimeout(() => {
+  const handleDownload = async (report) => {
+    const targetId = report.analysisId || report.rawItem?.analysis_id || report.rawItem?.id || report.id || report.username.replace('@', '')
+    setDownloading(report.id)
+    setDownloadError('')
+    try {
+      const safeUsername = report.username.replace('@', '').replace(/[^a-zA-Z0-9_-]/g, '_')
+      await downloadReportPdf(targetId, `ForensIQ_${report.id}_${safeUsername}_Dossier.pdf`)
+    } catch (err) {
+      console.error("PDF download failed:", err)
+      setDownloadError(`Failed to generate PDF for ${report.username}. Check backend connection.`)
+    } finally {
       setDownloading(null)
-      alert(`Forensic PDF Evidence Report ${id} downloaded successfully!`)
-    }, 1500)
+    }
   }
 
   return (
@@ -95,7 +104,7 @@ export default function Reports() {
           <span>Forensic Evidence Reports</span>
         </h2>
         <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1">
-          Archived PDF evidence dossiers containing ML model predictions, SHAP feature weights, and network graph topology proofs.
+          Archived forensic dossiers containing ML ensemble predictions, heuristic signals, and evidence indicators.
         </p>
       </div>
 
@@ -104,8 +113,8 @@ export default function Reports() {
         <div className="bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/60 rounded-2xl p-4 flex items-center gap-3">
           <AlertTriangle className="w-5 h-5 text-amber-500 flex-shrink-0" />
           <div>
-            <p className="text-sm font-bold text-amber-700 dark:text-amber-400">Showing Sample Data</p>
-            <p className="text-xs text-amber-600 dark:text-amber-500">No real analyses have been performed yet. The reports below are sample data for demonstration purposes. Analyze real profiles to generate actual reports.</p>
+            <p className="text-sm font-bold text-amber-700 dark:text-amber-400">Showing Demonstration Reports</p>
+            <p className="text-xs text-amber-600 dark:text-amber-500">No real analyses have been recorded in MongoDB yet. Run scans in the Profile Analyzer to generate actual live forensic reports.</p>
           </div>
         </div>
       )}
@@ -149,11 +158,10 @@ export default function Reports() {
               <button
                 key={f}
                 onClick={() => setFilter(f)}
-                className={`px-4 py-2.5 rounded-2xl text-xs font-bold transition ${
-                  filter === f
+                className={`px-4 py-2.5 rounded-2xl text-xs font-bold transition ${filter === f
                     ? 'bg-indigo-600 text-white shadow-sm'
                     : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
-                }`}
+                  }`}
               >
                 {f}
               </button>
@@ -195,7 +203,7 @@ export default function Reports() {
                   </p>
 
                   <p className="text-[11px] text-slate-400 mt-1">
-                    {report.features} SHAP features analyzed • {report.models} ML classifiers
+                    Gradient Boosting &amp; Random Forest Classifiers • Cresci Feature Vector
                   </p>
                 </div>
               </div>
@@ -211,12 +219,16 @@ export default function Reports() {
 
                 <div className="flex flex-col gap-2">
                   <button
-                    onClick={() => handleDownload(report.id)}
+                    onClick={() => handleDownload(report)}
                     disabled={downloading === report.id}
-                    className="bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 disabled:opacity-50 text-white font-bold text-xs px-4 py-2 rounded-xl shadow-xs flex items-center justify-center gap-1.5 whitespace-nowrap transition"
+                    className="bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 disabled:opacity-50 text-white font-bold text-xs px-4 py-2 rounded-xl shadow-xs flex items-center justify-center gap-1.5 whitespace-nowrap transition cursor-pointer"
                   >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>{downloading === report.id ? 'Generating PDF...' : 'Download PDF'}</span>
+                    {downloading === report.id ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Download className="w-3.5 h-3.5" />
+                    )}
+                    <span>{downloading === report.id ? 'Generating PDF...' : 'Download Dossier (PDF)'}</span>
                   </button>
 
                   <button

@@ -104,8 +104,8 @@ export default function Sidebar({ mobileOpen, setMobileOpen }) {
           {navGroups.map((group) => (
             <div key={group.title}>
               <p
-                className="px-2 text-[10px] font-extrabold uppercase tracking-widest mb-2"
-                style={{ color: 'rgba(255,255,255,0.28)' }}
+                className="px-2 mb-2"
+                style={{ fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'rgba(255,255,255,0.3)' }}
               >
                 {group.title}
               </p>
@@ -120,17 +120,21 @@ export default function Sidebar({ mobileOpen, setMobileOpen }) {
                       key={item.path}
                       to={item.path}
                       onClick={() => setMobileOpen && setMobileOpen(false)}
-                      className={`group flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all duration-150`}
+                      className={`group flex items-center justify-between px-3 py-2.5 rounded-xl transition-all duration-150`}
                       style={
                         isActive
                           ? {
                               background: 'linear-gradient(135deg, rgba(245,158,11,0.22) 0%, rgba(217,119,6,0.14) 100%)',
                               border: '1px solid rgba(245,158,11,0.35)',
                               color: '#f59e0b',
+                              fontSize: '12.5px',
+                              fontWeight: 600,
                             }
                           : {
                               color: 'rgba(255,255,255,0.55)',
                               border: '1px solid transparent',
+                              fontSize: '12.5px',
+                              fontWeight: 500,
                             }
                       }
                       onMouseEnter={(e) => {
@@ -151,8 +155,9 @@ export default function Sidebar({ mobileOpen, setMobileOpen }) {
                           style={{
                             width: '15px',
                             height: '15px',
-                            color: isActive ? '#f59e0b' : 'rgba(255,255,255,0.35)',
+                            color: isActive ? '#f59e0b' : 'rgba(255,255,255,0.4)',
                             flexShrink: 0,
+                            strokeWidth: isActive ? 2.2 : 1.8,
                           }}
                         />
                         <span>{item.label}</span>

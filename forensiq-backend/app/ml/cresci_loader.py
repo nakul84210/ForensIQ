@@ -2,7 +2,7 @@
 cresci_loader.py — Loader and feature converter for the Cresci-2017 benchmark dataset.
 
 Reads genuine_accounts and social_spambots datasets from Cresci-2017 zip/CSV files,
-transforms profile rows into our exact 28-feature schema, and returns a labeled DataFrame:
+transforms profile rows into our exact 26-feature schema, and returns a labeled DataFrame:
   label = 1 (bot)
   label = 0 (genuine / real)
 
@@ -12,25 +12,21 @@ language_switches, avg_hashtags) instead of using fixed constants.
 """
 
 import os
-import io
 import re
+import io
 import math
 import zipfile
+import numpy as np
 import pandas as pd
 from datetime import datetime, timezone
 from collections import defaultdict
 
 from app.ml.fake_detector import _shannon_entropy, _levenshtein_ratio
-from app.ml.text_analyzer import analyze_tweets, posting_hour_entropy
+from app.ml.text_analyzer import analyze_tweets, analyze_bio, posting_hour_entropy
 
 _ML_DIR = os.path.dirname(__file__)
 DATA_DIR = os.path.join(_ML_DIR, "data")
 ZIP_PATH = os.path.join(DATA_DIR, "cresci-2017.zip")
-
-_SPAM_KEYWORDS = [
-    "follow back", "followback", "f4f", "dm for promo", "crypto", "bitcoin",
-    "giveaway", "airdrop", "earn money", "passive income", "free", "trade"
-]
 
 # Maximum tweets per user to process (matches live inference behavior)
 _MAX_TWEETS_PER_USER = 10
@@ -125,14 +121,27 @@ def _compute_text_features_from_tweets(tweets: list) -> dict:
     using the same logic as text_analyzer.py does for live profiles.
     """
     if not tweets:
+        # NaN for all tweet-content-derived features when no tweets are available.
+        # Previously these were synthetic 0.0 values, which caused a
+        # training/inference mismatch: the model learned that all-zero content
+        # features = bot because training used 0.0 while live inference also
+        # produces 0.0 from fxTwitter (which never returns tweet content).
+        #
+        # Using NaN instead of 0.0 here means:
+        #   - XGB and LGB learn the correct NaN-routing direction from Cresci
+        #     no-tweet profiles during training.
+        #   - During inference, extract_features() also emits NaN for these
+        #     features when engagement_data_available=False, creating a
+        #     consistent training/inference distribution.
         return {
-            "avg_hashtags": 0.5,
-            "hashtag_repetition": 0.0,
-            "avg_tweet_length": 60.0,
-            "mention_density": 0.2,
-            "tweet_template_score": 0.0,
-            "posting_hour_entropy_val": 0.5,
-            "language_switches": 0,
+            "avg_hashtags":           np.nan,
+            "url_density":            np.nan,
+            "hashtag_repetition":     np.nan,
+            "avg_tweet_length":       np.nan,
+            "mention_density":        np.nan,
+            "tweet_template_score":   np.nan,
+            "posting_hour_entropy_val": np.nan,
+            "language_switches":      np.nan,
         }
 
     # Use analyze_tweets from text_analyzer for consistency with live inference
@@ -148,6 +157,7 @@ def _compute_text_features_from_tweets(tweets: list) -> dict:
 
     return {
         "avg_hashtags": avg_hashtags,
+        "url_density": tweet_analysis.get("url_density", 0.0),
         "hashtag_repetition": tweet_analysis.get("hashtag_repetition", 0.0),
         "avg_tweet_length": tweet_analysis.get("avg_tweet_length", 60.0),
         "mention_density": tweet_analysis.get("mention_density", 0.2),
@@ -181,17 +191,17 @@ def row_to_features(row: dict, user_tweets: list = None) -> dict:
     ent          = _shannon_entropy(username)
     has_bot_pat  = int(bool(re.search(r"(bot|spam|fake|auto|pump|clone|mass).*\d|\d{4,}", username, re.I)))
 
-    bio_lower   = bio.lower()
-    bio_spam_cnt = sum(1 for kw in _SPAM_KEYWORDS if kw in bio_lower)
-    bio_spam    = round(min(bio_spam_cnt / 2.0, 1.0), 2)
-    bio_has_url = int(bool(re.search(r'https?://\S+', bio)))
+    bio_analysis = analyze_bio(bio)
+    bio_spam    = bio_analysis.get("bio_spam_score", 0.0)
+    bio_has_url = int(bio_analysis.get("bio_has_url", False))
 
     verified    = int(bool(row.get("verified", False)))
     loc         = str(row.get("location") or "").strip()
     loc_present = int(bool(loc and loc.lower() not in ("nan", "none", "null", "unknown")))
 
-    def_img_val = str(row.get("default_profile_image") or "").lower()
-    def_img     = int(def_img_val in ("1", "true", "yes"))
+    # default_profile_image intentionally not computed:
+    # field is NaN in 99.7% of Cresci rows; SHAP=0 in all 3 models.
+    # Removed from FEATURE_ORDER to keep the schema honest.
 
     sim = _levenshtein_ratio(
         re.sub(r'[^a-z]', '', name.lower()),
@@ -212,7 +222,7 @@ def row_to_features(row: dict, user_tweets: list = None) -> dict:
         "likes_per_post":        likes_pp,
         "engagement_rate":       eng_rate,
         "avg_hashtags":          text_feats["avg_hashtags"],
-        "url_density":           1.0 if bio_has_url else 0.1,
+        "url_density":           text_feats["url_density"],
         "hashtag_repetition":    text_feats["hashtag_repetition"],
         "avg_tweet_length":      text_feats["avg_tweet_length"],
         "mention_density":       text_feats["mention_density"],
@@ -226,7 +236,7 @@ def row_to_features(row: dict, user_tweets: list = None) -> dict:
         "posting_hour_entropy":  text_feats["posting_hour_entropy_val"],
         "verified":              verified,
         "location_present":      loc_present,
-        "default_profile_image": def_img,
+        # default_profile_image removed from FEATURE_ORDER — not included here
         "language_switches":     text_feats["language_switches"],
         "name_username_similarity": sim,
     }

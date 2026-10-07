@@ -17,9 +17,13 @@ def get_image_features(image_bytes: bytes) -> dict:
         comp = np.array(Image.open(buf).convert("RGB"), dtype=np.float32)
         ela_scores.append(float(np.mean(np.abs(arr - comp))))
 
-    # Feature 2 — Noise analysis
+    # Feature 2 — Noise analysis via Laplacian residual
+    # Subtract a local-mean approximation (3x3 box blur) to isolate high-freq noise.
+    # The old formula std(gray - scalar_mean) == std(gray) is a no-op.
     gray = np.array(img.convert("L"), dtype=np.float32)
-    noise_std = float(np.std(gray - np.mean(gray)))
+    from PIL import ImageFilter
+    blurred = np.array(img.convert("L").filter(ImageFilter.BoxBlur(1)), dtype=np.float32)
+    noise_std = float(np.std(gray - blurred))
 
     # Feature 3 — Color statistics
     r, g, b = arr[:,:,0], arr[:,:,1], arr[:,:,2]
@@ -54,7 +58,7 @@ def get_image_features(image_bytes: bytes) -> dict:
         if exif and len(exif) > 0:
             has_exif = True
             camera = str(exif.get(271,"")) + " " + str(exif.get(272,""))
-    except:
+    except Exception:
         pass
 
     # Feature 7 — Dimension check
@@ -99,21 +103,28 @@ def score_features(f: dict, filename: str = "") -> tuple:
         score += 65
         reasons.append("Filename metadata matches AI generator tool pattern (" + filename + ")")
 
-    # 1. ELA range check — uniform ELA is suspicious regardless of EXIF
-    # (EXIF is not considered because social media strips it universally)
+    # 1. ELA range check — uniform ELA across quality levels is suspicious.
+    # Calibration note: real social-media images (already JPEG-compressed once by
+    # the platform) naturally have lower ELA range than pristine camera shots.
+    # Thresholds set conservatively to avoid false-positives on downloaded
+    # social media profile photos (which are typically already compressed).
     ela_range = f["ela_range"]
-    if ela_range < 1.2:
+    if ela_range < 0.5:
         score += 25
-        reasons.append("Uniform ELA compression profile (consistent with AI generation)")
-    elif ela_range < 2.5:
+        reasons.append("Very uniform ELA compression profile (strongly consistent with AI generation)")
+    elif ela_range < 1.5:
         score += 8
-        reasons.append("Moderately uniform ELA compression")
+        reasons.append("Moderately uniform ELA compression (may indicate AI or heavily recompressed image)")
 
-    # 2. Noise std check — synthetic images typically have very low noise variance
+    # 2. Laplacian noise residual — AI images have unnaturally smooth noise floors.
+    # Real camera photos: noise_std typically 4–12. AI images: typically < 3.
     ns = f["noise_std"]
-    if ns < 20:
+    if ns < 3.0:
         score += 20
-        reasons.append("Low sensor noise variance (consistent with synthetic generation)")
+        reasons.append("Extremely low noise residual (consistent with synthetic/AI generation)")
+    elif ns < 5.0:
+        score += 8
+        reasons.append("Low noise residual (possibly AI-generated or heavily post-processed)")
 
     # 3. High frequency content check
     if f["hf_ratio"] < 0.03:
@@ -161,9 +172,9 @@ def detect_deepfake(image_bytes: bytes, filename: str = "") -> dict:
         },
         {
             "label": "Noise Pattern Analysis",
-            "result": "Synthetic" if f["noise_std"] < 20 else "Natural",
-            "risk": "high" if f["noise_std"] < 20 else "low",
-            "detail": "Noise std: " + str(round(f["noise_std"],2)) + " (natural sensor range)"
+            "result": "Synthetic" if f["noise_std"] < 3.0 else ("Borderline" if f["noise_std"] < 5.0 else "Natural"),
+            "risk": "high" if f["noise_std"] < 3.0 else ("medium" if f["noise_std"] < 5.0 else "low"),
+            "detail": "Laplacian noise residual std: " + str(round(f["noise_std"],2)) + " (AI images typically <3.0, real photos 4–12)"
         },
         {
             "label": "Color Distribution",

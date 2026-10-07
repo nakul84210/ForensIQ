@@ -6,7 +6,7 @@ export default function Layout({ children }) {
   const [mobileOpen, setMobileOpen] = useState(false)
 
   return (
-    <div className="min-h-screen bg-slate-100 text-slate-800 flex flex-row font-sans antialiased">
+    <div className="min-h-screen text-slate-800 flex flex-row font-sans antialiased" style={{ background: '#f1f4f8' }}>
       <Sidebar mobileOpen={mobileOpen} setMobileOpen={setMobileOpen} />
 
       <div className="flex-1 flex flex-col min-w-0 min-h-screen">

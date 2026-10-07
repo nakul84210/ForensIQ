@@ -150,7 +150,7 @@ export default function SimilarityScanner() {
         <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl p-12 text-center shadow-sm">
           <div className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
           <p className="font-bold text-slate-900 dark:text-white text-sm">Computing Vector Cosine Distances...</p>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Cross-referencing 100k indexed social media posts</p>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Cross-referencing indexed benchmark post corpus</p>
         </div>
       )}
 
@@ -159,11 +159,10 @@ export default function SimilarityScanner() {
         <div className="space-y-6">
 
           {/* Verdict Banner */}
-          <div className={`border rounded-3xl p-6 shadow-sm ${
-            result.total_matches > 0
+          <div className={`border rounded-3xl p-6 shadow-sm ${result.total_matches > 0
               ? 'bg-rose-50/60 dark:bg-rose-950/30 border-rose-200 dark:border-rose-900/60'
               : 'bg-emerald-50/60 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-900/60'
-          }`}>
+            }`}>
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
               <div className="flex items-center gap-3">
                 <div className={`p-3 rounded-2xl text-white ${result.total_matches > 0 ? 'bg-rose-500' : 'bg-emerald-500'}`}>
